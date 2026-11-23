@@ -50,10 +50,12 @@ export class Board {
   load(colours: Uint8Array) {
     this.colours = colours;
     const img = this.pg.createImageData(SIZE, SIZE);
-    for (let i = 0; i < colours.length; i++) {
-      const [r, g, b] = rgbOf(colours[i]);
-      img.data.set([r, g, b, 255], i * 4);
-    }
+    const px = new Uint32Array(img.data.buffer); // one write per pixel (RGBA, little-endian)
+    const packed = new Uint32Array(256).map((_, c) => {
+      const [r, g, b] = rgbOf(c < PALETTE.length ? c : EMPTY);
+      return (255 << 24) | (b << 16) | (g << 8) | r;
+    });
+    for (let i = 0; i < colours.length; i++) px[i] = packed[colours[i]];
     this.pg.putImageData(img, 0, 0);
     this.flashes = [];
     this.kick();

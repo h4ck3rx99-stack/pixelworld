@@ -25,7 +25,7 @@ const HOST = '127.0.0.1';
 const BASE = `http://${HOST}:${PORT}`;
 if (new URL(BASE).hostname !== '127.0.0.1') throw new Error('simulator only runs against its own local server');
 
-const SIZE = 160, COLOURS = 16; // must mirror shared/pixels.ts
+const SIZE = 1000, COLOURS = 16; // must mirror shared/pixels.ts
 const rnd = (n) => Math.floor(Math.random() * n);
 // Each fake person "draws": a short random walk in one colour, so the canvas looks used rather than noisy.
 const walker = () => {
@@ -40,7 +40,7 @@ const walker = () => {
 
 const dataDir = mkdtempSync(join(tmpdir(), 'pixelworld-sim-'));
 const server = spawn(process.execPath, ['server/index.ts'], {
-  env: { ...process.env, PORT: String(PORT), DATA_DIR: dataDir, IP_PER_MIN: '1000000', DEVICE_DAILY: '1000000', IP_DAILY: '1000000', ADMIN_SECRET: '' },
+  env: { ...process.env, PORT: String(PORT), DATA_DIR: dataDir, IP_PER_MIN: '1000000', IP_DAILY: '100000000', ADMIN_SECRET: '' },
   stdio: ['ignore', 'pipe', 'inherit'],
 });
 const stop = () => {

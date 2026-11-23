@@ -5,7 +5,7 @@ import { fmt } from './ui.ts';
 /** 1080x1920 story card of the current canvas, shared through the Web Share API or downloaded. */
 export async function shareCard(pixels: HTMLCanvasElement, s: { people: number; pixels: number; mine: number }) {
   await Promise.all([document.fonts.load('800 80px "Inter Variable"'), document.fonts.load('500 40px "Inter Variable"')]);
-  const W = 1080, H = 1920, side = SIZE * 6; // 6 card px per canvas pixel keeps it crisp
+  const W = 1080, H = 1920, side = 960;
   const cv = document.createElement('canvas');
   cv.width = W;
   cv.height = H;
@@ -19,7 +19,7 @@ export async function shareCard(pixels: HTMLCanvasElement, s: { people: number; 
   g.fillStyle = PAPER;
   g.fillRect(x0, y0, side, side);
   g.shadowColor = 'transparent';
-  g.imageSmoothingEnabled = false;
+  g.imageSmoothingEnabled = SIZE > side; // shrinking a big canvas reads better smoothed; enlarging stays crisp
   g.drawImage(pixels, x0, y0, side, side);
 
   g.textAlign = 'center';

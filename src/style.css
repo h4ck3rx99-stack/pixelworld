@@ -110,12 +110,16 @@ nav { display: flex; }
 .place .bg { stroke: rgba(14, 16, 32, 0.18); stroke-width: 3.5; transform: rotate(-90deg); transform-origin: center; }
 .place .fg { stroke: var(--accent); stroke-width: 3.5; stroke-dasharray: 113.1; stroke-dashoffset: 0; transform: rotate(-90deg); transform-origin: center; }
 .place:not(.cooling) .fg { stroke: transparent; }
+.place:not(:disabled) .fg { stroke: rgba(14, 16, 32, 0.6); }
 .place:disabled .bg { stroke: rgba(244, 241, 234, 0.14); }
 .place .chip { fill: var(--c); stroke: rgba(0, 0, 0, .3); stroke-width: 1; }
 .place .txt { display: flex; flex-direction: column; }
 .place b { font-size: 16px; font-weight: 750; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
 .place small { font-size: 12.5px; font-weight: 600; opacity: .7; font-variant-numeric: tabular-nums; }
 .place small:empty { display: none; }
+.bank { margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; line-height: 1.1; }
+.bank b { font-size: 20px; font-weight: 800; letter-spacing: -0.02em; }
+.bank small { font-size: 11.5px; }
 .ghost {
   display: inline-flex; align-items: center; gap: 8px; min-height: 48px; padding: 0 12px;
   border-radius: 12px; font-size: 13.5px; font-weight: 650; color: var(--ink-2); white-space: nowrap;

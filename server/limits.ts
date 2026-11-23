@@ -1,52 +1,58 @@
-import { utcDay } from '../shared/pixels.ts';
+import { BANK_SIZE, REGEN_MS, utcDay } from '../shared/pixels.ts';
 
-export type LimitConfig = { cooldownMs: number; ipPerMin: number; deviceDaily: number; ipDaily: number };
-export type Verdict = { ok: true } | { ok: false; reason: 'cooldown' | 'rate' | 'daily'; retryMs: number };
+export type LimitConfig = { ipPerMin: number; ipDaily: number };
+export type Verdict = { ok: true; tokens: number } | { ok: false; reason: 'empty' | 'rate' | 'daily'; retryMs: number; tokens: number };
+export type Bank = { tokens: number; at: number };
+/** Where banks live; the server backs this with SQLite so a restart doesn't refill everyone. */
+export type BankStore = { get(device: string): Bank | undefined; set(device: string, b: Bank): void };
 
-const SLACK_MS = 250; // network jitter between the client's timer and ours
+const memoryStore = (): BankStore => {
+  const m = new Map<string, Bank>();
+  return { get: (d) => m.get(d), set: (d, b) => void m.set(d, b) };
+};
 
-/** In-memory cooldown, per-IP rate limit and daily caps. Lost on restart, which only ever errs toward allowing. */
+/** Tokens a bank holds at `now`: starts full, refills one per REGEN_MS, never above BANK_SIZE. */
+export const tokensAt = (b: Bank | undefined, now: number) =>
+  b ? Math.min(BANK_SIZE, b.tokens + Math.max(0, now - b.at) / REGEN_MS) : BANK_SIZE;
+
+/** Per-device pixel bank plus per-IP rate limit and daily cap (those two are in memory). */
 export class Limiter {
-  private last = new Map<string, number>();
   private ipWin = new Map<string, { start: number; n: number }>();
   private daily = new Map<string, number>();
   private day = '';
-
   cfg: LimitConfig;
-  constructor(cfg: LimitConfig) {
+  store: BankStore;
+
+  constructor(cfg: LimitConfig, store: BankStore = memoryStore()) {
     this.cfg = cfg;
+    this.store = store;
   }
 
-  /** Checks every limit and, if all pass, records the placement. */
+  tokens(device: string, now: number) {
+    return tokensAt(this.store.get(device), now);
+  }
+
+  /** Checks every limit and, if all pass, spends one pixel from the device's bank. */
   take(device: string, ip: string, now: number): Verdict {
     const day = utcDay(now);
     if (day !== this.day) (this.day = day), this.daily.clear();
 
-    const wait = (this.last.get(device) ?? -Infinity) + this.cfg.cooldownMs - SLACK_MS - now;
-    if (wait > 0) return { ok: false, reason: 'cooldown', retryMs: Math.ceil(wait + SLACK_MS) };
+    const tokens = this.tokens(device, now);
+    if (tokens < 1) return { ok: false, reason: 'empty', retryMs: Math.ceil((1 - tokens) * REGEN_MS), tokens };
 
     let w = this.ipWin.get(ip);
     if (!w || now - w.start >= 60_000) w = { start: now, n: 0 };
-    if (w.n >= this.cfg.ipPerMin) return { ok: false, reason: 'rate', retryMs: w.start + 60_000 - now };
+    if (w.n >= this.cfg.ipPerMin) return { ok: false, reason: 'rate', retryMs: w.start + 60_000 - now, tokens };
+    if ((this.daily.get(ip) ?? 0) >= this.cfg.ipDaily) return { ok: false, reason: 'daily', retryMs: 0, tokens };
 
-    const dk = 'd:' + device, ik = 'i:' + ip;
-    if ((this.daily.get(dk) ?? 0) >= this.cfg.deviceDaily || (this.daily.get(ik) ?? 0) >= this.cfg.ipDaily)
-      return { ok: false, reason: 'daily', retryMs: 0 };
-
-    this.last.set(device, now);
+    this.store.set(device, { tokens: tokens - 1, at: now });
     w.n++;
     this.ipWin.set(ip, w);
-    this.daily.set(dk, (this.daily.get(dk) ?? 0) + 1);
-    this.daily.set(ik, (this.daily.get(ik) ?? 0) + 1);
-    return { ok: true };
-  }
-
-  cooldownLeft(device: string, now: number) {
-    return Math.max(0, (this.last.get(device) ?? -Infinity) + this.cfg.cooldownMs - now);
+    this.daily.set(ip, (this.daily.get(ip) ?? 0) + 1);
+    return { ok: true, tokens: tokens - 1 };
   }
 
   prune(now: number) {
-    for (const [k, t] of this.last) if (now - t > this.cfg.cooldownMs) this.last.delete(k);
     for (const [k, w] of this.ipWin) if (now - w.start >= 60_000) this.ipWin.delete(k);
   }
 }

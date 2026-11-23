@@ -1,6 +1,8 @@
 // Board size, palette and validation shared by server and client.
 
-export const SIZE = 160; // the canvas is SIZE x SIZE pixels
+export const SIZE = 1000; // the canvas is SIZE x SIZE pixels
+export const BANK_SIZE = 64; // pixels a new device starts with, and the most it can hold
+export const REGEN_MS = 30_000; // one pixel comes back every 30 seconds
 export const EMPTY = 255; // colour index of an untouched pixel (drawn as the paper colour)
 export const PAPER = '#F4F1EA';
 

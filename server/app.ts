@@ -4,10 +4,11 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { Hono, type Context } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
+import { compress } from 'hono/compress';
 import { streamSSE, type SSEStreamingApi } from 'hono/streaming';
 import { getConnInfo } from '@hono/node-server/conninfo';
 import { EMPTY, SIZE, validPixel, type WireEvent } from '../shared/pixels.ts';
-import { Limiter, type LimitConfig } from './limits.ts';
+import { Limiter, type Bank, type LimitConfig } from './limits.ts';
 
 export type Options = { dataDir: string; adminSecret?: string; limits: LimitConfig; now?: () => number };
 
@@ -29,6 +30,7 @@ export function createApp(opts: Options) {
       id INTEGER PRIMARY KEY AUTOINCREMENT, x INTEGER NOT NULL, y INTEGER NOT NULL, colour INTEGER NOT NULL,
       device TEXT NOT NULL, who TEXT NOT NULL, ts INTEGER NOT NULL);
     CREATE INDEX IF NOT EXISTS events_device ON events(device);
+    CREATE TABLE IF NOT EXISTS banks (device TEXT PRIMARY KEY, tokens REAL NOT NULL, at INTEGER NOT NULL);
   `);
   const q = {
     insert: db.prepare('INSERT INTO events (x, y, colour, device, who, ts) VALUES (?, ?, ?, ?, ?, ?)'),
@@ -36,6 +38,8 @@ export function createApp(opts: Options) {
     since: db.prepare('SELECT * FROM events WHERE id > ? ORDER BY id LIMIT ?'),
     log: db.prepare('SELECT x, y, colour FROM events ORDER BY id'),
     exportAll: db.prepare('SELECT id, x, y, colour, device, ts FROM events ORDER BY id'),
+    bankGet: db.prepare('SELECT tokens, at FROM banks WHERE device = ?'),
+    bankPut: db.prepare('INSERT OR REPLACE INTO banks (device, tokens, at) VALUES (?, ?, ?)'),
   };
 
   // ---- the board, kept in memory and rebuilt from the event log on start ----
@@ -108,7 +112,10 @@ export function createApp(opts: Options) {
     }
   }
 
-  const limiter = new Limiter(opts.limits);
+  const limiter = new Limiter(opts.limits, {
+    get: (d) => q.bankGet.get(d) as Bank | undefined,
+    set: (d, b) => void q.bankPut.run(d, b.tokens, b.at),
+  });
   const timers = [setInterval(flush, 250), setInterval(() => limiter.prune(now()), 60_000)];
 
   function clientIp(c: Context) {
@@ -124,6 +131,9 @@ export function createApp(opts: Options) {
     await next();
     if (!c.res.headers.get('cache-control')) c.header('cache-control', 'no-store');
   });
+  // The board is 1 MB of mostly identical bytes; gzip it here rather than trusting the proxy to.
+  app.use('/api/state', compress());
+  app.use('/api/log', compress());
   app.use('/api/*', bodyLimit({ maxSize: 2048, onError: (c) => c.json({ error: 'too_large' }, 413) }));
 
   app.get('/api/health', (c) => c.json({ ok: true, rss: process.memoryUsage().rss, clients: clients.size }));
@@ -136,7 +146,7 @@ export function createApp(opts: Options) {
     return c.json({
       size: SIZE, lastId, board: Buffer.from(board).toString('base64'), ...stats(), since: firstTs,
       mine: me ? mine.get(d) ?? 0 : 0, myPixels,
-      cooldownMs: me ? limiter.cooldownLeft(d, now()) : 0,
+      tokens: limiter.tokens(me ? d : '', now()),
     });
   });
 
@@ -146,14 +156,14 @@ export function createApp(opts: Options) {
       return c.json({ error: 'invalid' }, 400);
     const t = now();
     const v = limiter.take(b.d, clientIp(c), t);
-    if (!v.ok) return c.json({ error: v.reason, retryMs: v.retryMs }, 429);
+    if (!v.ok) return c.json({ error: v.reason, retryMs: v.retryMs, tokens: v.tokens }, 429);
     const who = whoOf(b.d);
     const id = Number(q.insert.run(b.x, b.y, b.colour, b.d, who, t).lastInsertRowid);
     const row: Row = { id, x: b.x, y: b.y, colour: b.colour, device: b.d, who, ts: t };
     apply(row);
     presence.set(b.d, t);
     pending.push(wire(row));
-    return c.json({ ev: wire(row), mine: mine.get(b.d), ...stats() });
+    return c.json({ ev: wire(row), mine: mine.get(b.d), tokens: v.tokens, ...stats() });
   });
 
   app.post('/api/hello', async (c) => {

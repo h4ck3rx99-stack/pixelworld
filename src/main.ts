@@ -1,6 +1,6 @@
 import '@fontsource-variable/inter';
 import './style.css';
-import { PALETTE, PALETTE_NAMES, SIZE, type WireEvent } from '../shared/pixels.ts';
+import { BANK_SIZE, PALETTE, PALETTE_NAMES, REGEN_MS, SIZE, type WireEvent } from '../shared/pixels.ts';
 import { chime, setSound, soundOn } from './audio.ts';
 import { Board } from './board.ts';
 import { deviceId, getJSON, Live, myWho, postJSON, type State } from './net.ts';
@@ -8,13 +8,11 @@ import { shareCard } from './share.ts';
 import { openTimelapse } from './timelapse.ts';
 import { $, closeTop, fmt, openPanel, store } from './ui.ts';
 
-const COOLDOWN = 4000;
 const board = new Board($<HTMLCanvasElement>('#board'));
 const st = { lastId: 0, pixels: 0, people: 0, online: -1, mine: 0, since: 0 };
 const ids = new Int32Array(SIZE * SIZE); // id of the last event applied to each pixel
 const myPixels = new Set<number>();
 let who = '';
-let cooldownUntil = 0;
 let selected = -1;
 let highlightUntil = 0;
 let colour = (() => {
@@ -99,7 +97,7 @@ const up = (e: PointerEvent) => {
   const dbl = e.timeStamp - lastTap.t < 320 && Math.hypot(p.x - lastTap.x, p.y - lastTap.y) < 40;
   lastTap = { t: e.timeStamp, x: p.x, y: p.y };
   dismissHint();
-  if (dbl) return animateZoom(zoom > 1.5 ? 1 : Math.min(maxZoom(), 8), p.x, p.y); // double-tap: dive in / back out
+  if (dbl) return animateZoom(zoom > 1.5 ? 1 : Math.min(maxZoom(), 16 / base.s), p.x, p.y); // double-tap: dive in to ~16px pixels / back out
   select(board.pixelAt(p.x, p.y));
 };
 cv.addEventListener('pointerup', up);
@@ -117,60 +115,68 @@ function select(i: number) {
   board.kick();
 }
 
+// Pixel bank: start with BANK_SIZE, one comes back every REGEN_MS. The server enforces it; this mirrors it.
+let bank = { tokens: BANK_SIZE, at: Date.now() };
+let blockedUntil = 0; // set when the network as a whole is rate limited
+let inflight = 0;
+const tokensNow = () => Math.min(BANK_SIZE, bank.tokens + (Date.now() - bank.at) / REGEN_MS);
+const clock = (ms: number) => `${Math.floor(ms / 60000)}:${String(Math.ceil(ms / 1000) % 60).padStart(2, '0')}`;
+
 function paintPlace() {
-  const left = Math.max(0, cooldownUntil - Date.now());
-  placeBtn.disabled = selected < 0 || left > 0;
-  $('#place-label').textContent = left
-    ? `Next pixel in ${(left / 1000).toFixed(1)}s`
-    : selected < 0 ? 'Tap a pixel first' : 'Place pixel';
+  const t = tokensNow(), n = Math.floor(t);
+  const wait = Math.max(blockedUntil - Date.now(), n < 1 ? (1 - t) * REGEN_MS : 0);
+  placeBtn.disabled = selected < 0 || wait > 0;
+  $('#place-label').textContent = wait > 0 ? `Next pixel in ${clock(wait)}` : selected < 0 ? 'Tap a pixel first' : 'Place pixel';
   $('#place-xy').textContent = selected < 0 ? '' : `${selected % SIZE}, ${(selected / SIZE) | 0}`;
-  $<SVGCircleElement>('#cdring .fg').style.strokeDashoffset = String(113.1 * (left / COOLDOWN));
-  placeBtn.classList.toggle('cooling', left > 0);
+  $('#bank b').textContent = String(n);
+  $('#bank small').textContent = n < BANK_SIZE ? `+1 in ${clock((1 - (t % 1)) * REGEN_MS)}` : 'full';
+  // the ring fills toward the next pixel
+  $<SVGCircleElement>('#cdring .fg').style.strokeDashoffset = String(113.1 * (n < BANK_SIZE ? 1 - (t % 1) : 0));
+  placeBtn.classList.toggle('cooling', n < BANK_SIZE);
 }
+setInterval(paintPlace, 250);
 
-let cdRaf = 0;
-function tickCooldown() {
-  cancelAnimationFrame(cdRaf);
-  const step = () => {
-    paintPlace();
-    if (cooldownUntil > Date.now()) cdRaf = requestAnimationFrame(step);
-  };
-  step();
-}
-
-placeBtn.addEventListener('click', () => selected >= 0 && cooldownUntil <= Date.now() && place(selected));
+placeBtn.addEventListener('click', () => selected >= 0 && !placeBtn.disabled && place(selected));
 
 async function place(i: number) {
   const prev = board.colours[i], prevId = ids[i];
   const c = colour;
   board.set(i, c);
-  cooldownUntil = Date.now() + COOLDOWN;
+  bank = { tokens: tokensNow() - 1, at: Date.now() };
+  inflight++;
   navigator.vibrate?.(10);
   chime(c);
-  tickCooldown();
+  paintPlace();
   let res;
   try {
     res = await postJSON('/api/place', { d: deviceId, x: i % SIZE, y: (i / SIZE) | 0, colour: c });
   } catch {
     res = { status: 0, body: {} };
   }
+  inflight--;
+  const b = res.body;
+  // resync with the server's count once nothing else is on its way
+  const synced = typeof b.tokens === 'number' && !inflight;
+  if (synced) bank = { tokens: b.tokens, at: Date.now() };
   if (res.status === 200) {
-    st.mine = res.body.mine;
+    st.mine = b.mine;
     myPixels.add(i);
-    setStats(res.body);
-    applyEvent(res.body.ev, false);
-    toast(`+1 · You've placed ${fmt(st.mine)} pixel${st.mine === 1 ? '' : 's'}`, true);
+    setStats(b);
+    applyEvent(b.ev, false);
+    const n = Math.floor(tokensNow());
+    toast(`+1 · ${n} pixel${n === 1 ? '' : 's'} left`, true);
+    paintPlace();
     return;
   }
   // rejected: roll the optimistic pixel back unless someone has painted it since
   if (ids[i] === prevId) board.set(i, prev, false);
-  const b = res.body;
-  cooldownUntil = b.retryMs ? Date.now() + b.retryMs : 0;
-  tickCooldown();
+  if (!synced) bank = { tokens: tokensNow() + 1, at: Date.now() }; // give back the pixel we spent optimistically
+  if (b.error === 'rate') blockedUntil = Date.now() + (b.retryMs ?? 0);
+  paintPlace();
   toast(
-    b.error === 'cooldown' ? 'One pixel every 4 seconds. Almost there.'
+    b.error === 'empty' ? 'Out of pixels. One comes back every 30 seconds.'
     : b.error === 'rate' ? 'Lots of pixels from your network right now. Try again in a moment.'
-    : b.error === 'daily' ? "You've hit today's limit. It resets at 00:00 UTC."
+    : b.error === 'daily' ? "Your network hit today's limit. It resets at 00:00 UTC."
     : "Couldn't reach the canvas. Check your connection.",
   );
 }
@@ -207,7 +213,8 @@ async function loadState() {
   s.myPixels.forEach((i) => myPixels.add(i));
   board.load(Uint8Array.from(atob(s.board), (ch) => ch.charCodeAt(0)));
   setStats(s);
-  if (s.cooldownMs > 0) (cooldownUntil = Date.now() + s.cooldownMs), tickCooldown();
+  bank = { tokens: s.tokens, at: Date.now() };
+  paintPlace();
 }
 
 const live = new Live(
@@ -239,7 +246,7 @@ board.overlay = (g, now) => {
     const [x, y, w] = board.rectOf(selected);
     const r = Math.max(w, 6 * d);
     const ox = x + w / 2 - r / 2, oy = y + w / 2 - r / 2;
-    if (cooldownUntil <= Date.now()) {
+    if (!placeBtn.disabled) {
       g.globalAlpha = 0.75;
       g.fillStyle = PALETTE[colour];
       g.fillRect(ox, oy, r, r);
