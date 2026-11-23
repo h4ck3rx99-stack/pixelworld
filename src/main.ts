@@ -18,7 +18,7 @@ let cooldownUntil = 0;
 let selected = -1;
 let highlightUntil = 0;
 let colour = (() => {
-  const c = Number(store.get('pw.colour'));
+  const c = Number(store.get('pw.colour') ?? 5); // first visit: red, never white on white paper
   return Number.isInteger(c) && c >= 0 && c < PALETTE.length ? c : 5;
 })();
 
