@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import Database from 'better-sqlite3';
+import { DatabaseSync } from 'node:sqlite';
 import { Hono, type Context } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { streamSSE, type SSEStreamingApi } from 'hono/streaming';
@@ -23,9 +23,8 @@ export const whoOf = (device: string) => createHash('sha256').update(device).dig
 export function createApp(opts: Options) {
   const now = opts.now ?? Date.now;
   mkdirSync(opts.dataDir, { recursive: true });
-  const db = new Database(join(opts.dataDir, 'rangoli.db'));
-  db.pragma('journal_mode = WAL');
-  db.pragma('synchronous = NORMAL');
+  const db = new DatabaseSync(join(opts.dataDir, 'rangoli.db'));
+  db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 2000;');
   db.exec(`
     CREATE TABLE IF NOT EXISTS events (
       id INTEGER PRIMARY KEY AUTOINCREMENT, day TEXT NOT NULL, ring INTEGER NOT NULL, slot INTEGER NOT NULL,
@@ -36,15 +35,15 @@ export function createApp(opts: Options) {
   `);
   const q = {
     insert: db.prepare('INSERT INTO events (day, ring, slot, piece, colour, device, who, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'),
-    dayEvents: db.prepare<[string]>('SELECT * FROM events WHERE day = ? ORDER BY id'),
-    since: db.prepare<[string, number, number]>('SELECT * FROM events WHERE day = ? AND id > ? ORDER BY id LIMIT ?'),
+    dayEvents: db.prepare('SELECT * FROM events WHERE day = ? ORDER BY id'),
+    since: db.prepare('SELECT * FROM events WHERE day = ? AND id > ? ORDER BY id LIMIT ?'),
     maxId: db.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM events'),
     firstDay: db.prepare('SELECT MIN(day) AS d FROM events'),
     days: db.prepare('SELECT day, COUNT(*) AS pieces, COUNT(DISTINCT device) AS people FROM events GROUP BY day ORDER BY day DESC'),
-    snapGet: db.prepare<[string]>('SELECT * FROM snapshots WHERE day = ?'),
+    snapGet: db.prepare('SELECT * FROM snapshots WHERE day = ?'),
     snapPut: db.prepare('INSERT OR REPLACE INTO snapshots (day, cells, pieces, people) VALUES (?, ?, ?, ?)'),
-    log: db.prepare<[string]>('SELECT ring, slot, piece, colour FROM events WHERE day = ? ORDER BY id').raw(),
-    exportDay: db.prepare<[string]>('SELECT id, ring, slot, piece, colour, device, ts FROM events WHERE day = ? ORDER BY id'),
+    log: db.prepare('SELECT ring, slot, piece, colour FROM events WHERE day = ? ORDER BY id'),
+    exportDay: db.prepare('SELECT id, ring, slot, piece, colour, device, ts FROM events WHERE day = ? ORDER BY id'),
   };
 
   // ---- today's board, kept in memory ----
@@ -258,7 +257,7 @@ export function createApp(opts: Options) {
     const s = snapshot(day);
     if (!s) return c.json({ error: 'not_found' }, 404);
     if (day < today) c.header('cache-control', 'public, max-age=3600');
-    return c.json({ day, dayNo: s.dayNo, pieces: s.pieces, people: s.people, ev: (q.log.all(day) as number[][]).flat() });
+    return c.json({ day, dayNo: s.dayNo, pieces: s.pieces, people: s.people, ev: (q.log.all(day) as Pick<Row, 'ring' | 'slot' | 'piece' | 'colour'>[]).flatMap((r) => [r.ring, r.slot, r.piece, r.colour]) });
   });
 
   // ---- admin (Authorization: Bearer $ADMIN_SECRET) ----
