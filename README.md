@@ -1,7 +1,7 @@
 # PixelWorld
 
-One shared pixel canvas for the whole internet. Everyone paints on the same 1200 × 1800 grid
-(portrait, so it fills a phone), live. Pick one of 16 colours and draft pixels by tapping
+One shared pixel canvas for the whole internet. Everyone paints on the same 2400 × 1350 grid
+(16:9 landscape), live. Pick one of 16 colours and draft pixels by tapping
 (Move mode) or dragging (Draw mode), then press Place once to put them all up. Everyone has a
 bank of up to 64 pixels that refills one every 30 seconds. The canvas never resets, and the
 timelapse replays its whole history.
@@ -95,7 +95,7 @@ Set `ADMIN_SECRET` in the app's env vars on Embarko.
 - **Batches**: `POST /api/place {d, pixels: [[x, y, colour], …]}` places up to 64 in one
   transaction, as many as the bank allows; the client keeps the rest as drafts.
 - **Pixel info**: `GET /api/pixel?x=&y=` returns how many times a pixel was painted and when (never who).
-- **Rendering** (`src/board.ts`): Canvas 2D. Pixels live on a 1200 × 1800 offscreen canvas;
+- **Rendering** (`src/board.ts`): Canvas 2D. Pixels live on a 2400 × 1350 offscreen canvas;
   each frame is one scaled `drawImage` with smoothing off, plus a faint grid when zoomed in.
 - **Timelapse** (`src/timelapse.ts`): `GET /api/log` returns the whole history as flat
   `[x, y, colour, …]`, replayed over ~20 s.

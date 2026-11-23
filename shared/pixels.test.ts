@@ -13,8 +13,8 @@ describe('pixels', () => {
     expect(validPixel('1', 0, 0)).toBe(false);
   });
 
-  it('is a portrait canvas', () => {
-    expect(H).toBeGreaterThan(W);
+  it('is a 16:9 landscape canvas', () => {
+    expect(W / H).toBeCloseTo(16 / 9);
   });
 
   it('has a name for every colour', () => {

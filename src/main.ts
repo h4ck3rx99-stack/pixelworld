@@ -29,11 +29,13 @@ const maxZoom = () => Math.max(1, 44 / base.s); // up to ~44 css px per pixel
 function layout() {
   const w = innerWidth, h = innerHeight;
   const top = $('#top').getBoundingClientRect().bottom;
-  const bottom = $('#sheet').getBoundingClientRect().top;
-  document.documentElement.style.setProperty('--sheet-h', `${h - bottom}px`);
-  const avail = Math.max(120, bottom - top);
+  const sheet = $('#sheet').getBoundingClientRect();
+  const side = sheet.top < h / 2; // landscape phones: the sheet is a column on the right
+  const right = side ? sheet.left : w, bottom = side ? h : sheet.top;
+  document.documentElement.style.setProperty('--sheet-h', `${side ? 0 : h - bottom}px`);
+  const availW = Math.max(120, right - 16), availH = Math.max(120, bottom - top - 12);
   // fit the whole canvas, however big
-  base = { cx: w / 2, cy: top + avail / 2, s: Math.max(0.05, Math.min((w - 16) / W, (avail - 12) / H)) };
+  base = { cx: right / 2, cy: top + (bottom - top) / 2, s: Math.max(0.05, Math.min(availW / W, availH / H)) };
   zoom = Math.min(zoom, maxZoom());
   board.resize(w, h, view());
 }

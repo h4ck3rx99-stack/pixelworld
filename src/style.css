@@ -191,6 +191,27 @@ nav { display: flex; }
 .tl.rec #tl-count { font-size: clamp(15px, 4.2vw, 24px); font-weight: 600; color: var(--ink); margin: 0; }
 .tl:not(.rec) .tl-hint { display: none; }
 
+/* Phones held sideways and wide desktop windows: the sheet becomes a column on the right
+   so the wide canvas gets the full height. */
+@media (orientation: landscape) and (max-height: 560px), (min-width: 1000px) and (min-aspect-ratio: 4/3) {
+  #sheet {
+    inset: 0 0 0 auto; width: 304px; overflow-y: auto; border-top: 0; border-left: 1px solid var(--line);
+    border-radius: 20px 0 0 20px; padding: calc(env(safe-area-inset-top) + 8px) calc(env(safe-area-inset-right) + 4px) 10px 4px;
+  }
+  .hosted #sheet { padding-bottom: 10px; }
+  #top { right: 304px; padding-bottom: 8px; }
+  .meta #stats { display: none; }
+  .tools { flex-wrap: wrap; justify-content: space-between; }
+  .tools .seg { margin-right: 0; }
+  .tool { min-width: 44px; padding: 0 4px; }
+  .palette { grid-template-columns: repeat(8, 1fr); }
+  .swatch { height: 40px; }
+  .swatch i { width: 26px; height: 26px; }
+  .actions { padding: 0 4px; }
+  .place { min-height: 52px; padding: 0 12px 0 8px; gap: 8px; }
+  .toast { left: calc((100vw - 304px) / 2); bottom: 16px; }
+  .hint { left: calc((100vw - 304px) / 2); }
+}
 @media (min-width: 700px) {
   .brand { font-size: 25px; }
   #top { padding-left: 24px; padding-right: 20px; }

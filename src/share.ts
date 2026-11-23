@@ -5,14 +5,14 @@ import { fmt } from './ui.ts';
 /** 1080x1920 story card of the current canvas, shared through the Web Share API or downloaded. */
 export async function shareCard(pixels: HTMLCanvasElement, s: { people: number; pixels: number; mine: number }) {
   await Promise.all([document.fonts.load('800 80px "Inter Variable"'), document.fonts.load('500 40px "Inter Variable"')]);
-  const W = 1080, H = 1920, k = 1200 / BH, bw = BW * k, bh = BH * k; // canvas box 800 x 1200
+  const W = 1080, H = 1920, k = Math.min(960 / BW, 1200 / BH), bw = BW * k, bh = BH * k; // fit a 960 x 1200 box
   const cv = document.createElement('canvas');
   cv.width = W;
   cv.height = H;
   const g = cv.getContext('2d')!;
   g.fillStyle = BG;
   g.fillRect(0, 0, W, H);
-  const x0 = (W - bw) / 2, y0 = 380;
+  const x0 = (W - bw) / 2, y0 = 380 + (1200 - bh) / 2; // centred in the box between the title and the stats
   g.shadowColor = 'rgba(0,0,0,0.6)';
   g.shadowBlur = 60;
   g.shadowOffsetY = 18;

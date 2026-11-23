@@ -31,7 +31,7 @@ export function encodePng(w: number, h: number, rgb: Uint8Array) {
 
 /** Link preview: the live canvas on the app's dark background, 1200 x 630. */
 export function ogImage(board: Uint8Array) {
-  const W = 1200, H = 630, k = 570 / BH; // fit the portrait canvas to the preview's height
+  const W = 1200, H = 630, k = Math.min(1120 / BW, 570 / BH); // fit the canvas inside the preview with a margin
   const cw = Math.round(BW * k), ch = Math.round(BH * k), x0 = (W - cw) / 2, y0 = (H - ch) / 2;
   const rgb = new Uint8Array(W * H * 3);
   const colourOf = (v: number) => COLOUR[v === EMPTY ? PALETTE.length : v];

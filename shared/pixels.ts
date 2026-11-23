@@ -1,7 +1,7 @@
 // Board size, palette and validation shared by server and client.
 
-export const W = 1200; // canvas width in pixels
-export const H = 1800; // canvas height: portrait, so it fills a phone screen
+export const W = 2400; // canvas width in pixels
+export const H = 1350; // canvas height: 16:9 landscape, like a laptop or TV screen
 export const BANK_SIZE = 64; // pixels a new device starts with, the most it can hold, and the most in one batch
 export const REGEN_MS = 30_000; // one pixel comes back every 30 seconds
 export const EMPTY = 255; // colour index of an untouched pixel (drawn as the paper colour)
