@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>RangoliLive · one rangoli, drawn by everyone</title>
+  <meta name="description" content="One shared, live rangoli that everyone draws together from their phones. Every piece is mirrored 8 ways. Fresh board every midnight IST." />
+  <meta name="theme-color" content="#1a1211" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="/icon-192.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="RangoliLive" />
+  <meta property="og:description" content="One rangoli, drawn live by strangers. Tap anywhere: your piece appears 8 times." />
+  <meta property="og:image" content="https://rangolilive.embarko.app/og.jpg" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta name="twitter:card" content="summary_large_image" />
+</head>
+<body>
+  <canvas id="board" aria-label="The shared rangoli. Tap to place your piece; it is mirrored 8 ways around the centre."></canvas>
+
+  <header id="top">
+    <div class="bar">
+      <h1 class="brand">Rangoli<em>Live</em></h1>
+      <nav>
+        <button id="sound" class="icon" aria-pressed="false" aria-label="Sound off">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path class="on" d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/><path class="off" d="M16 9.5l5 5m0-5l-5 5"/></svg>
+        </button>
+        <button id="gallery-btn" class="icon" aria-label="Gallery and timelapse">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/></svg>
+        </button>
+        <button id="share-btn" class="icon" aria-label="Share a story card">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4m0 0L8 8m4-4l4 4"/><path d="M6 12v6.5A1.5 1.5 0 0 0 7.5 20h9a1.5 1.5 0 0 0 1.5-1.5V12"/></svg>
+        </button>
+        <button id="about-btn" class="icon" aria-label="About RangoliLive">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5"/><circle cx="12" cy="7.8" r=".6" class="dot"/></svg>
+        </button>
+      </nav>
+    </div>
+    <div class="meta">
+      <span id="online" class="pill"><i></i><b>Connecting…</b></span>
+      <span id="stats"></span>
+    </div>
+  </header>
+
+  <div id="hint" class="hint" hidden>
+    <p><b>Tap anywhere.</b> Your piece appears 8 times.</p>
+    <p class="sub">Strangers are drawing with you right now.</p>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"><span></span><button type="button" hidden>Show mine</button></div>
+
+  <section id="sheet" aria-label="Pieces and colours">
+    <div class="head">
+      <div id="cd" class="cd ready">
+        <svg id="cdring" viewBox="0 0 40 40" aria-hidden="true"><circle class="bg" cx="20" cy="20" r="18"/><circle class="fg" cx="20" cy="20" r="18"/></svg>
+        <span id="cdlabel" aria-live="polite">Ready · tap the floor</span>
+      </div>
+      <button id="mine" class="ghost" type="button">Show mine</button>
+    </div>
+    <div id="pieces" class="row" role="radiogroup" aria-label="Piece"></div>
+    <div id="colours" class="row" role="radiogroup" aria-label="Colour"></div>
+  </section>
+
+  <div id="gallery" class="panel" role="dialog" aria-modal="true" aria-labelledby="gallery-title" hidden>
+    <div class="panel-head">
+      <h2 id="gallery-title">Every day's rangoli</h2>
+      <button class="icon" data-close aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+    <p class="lede">Tap a day to watch it being drawn, from a bare floor to the final piece.</p>
+    <div id="days" class="days"></div>
+  </div>
+
+  <div id="tl" class="panel tl" role="dialog" aria-modal="true" aria-label="Timelapse" hidden>
+    <canvas></canvas>
+    <div class="tl-text">
+      <p id="tl-date"></p>
+      <p id="tl-count"></p>
+    </div>
+    <div id="tl-hint" class="tl-hint">Tap to play · double-tap to exit</div>
+    <div class="tl-controls">
+      <button id="tl-close" class="icon" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      <button id="tl-replay" class="ghost" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z" class="fill"/></svg>Replay</button>
+      <button id="tl-record" class="ghost" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="5.5" class="fill rec"/></svg>Record mode</button>
+    </div>
+  </div>
+
+  <div id="about" class="panel modal" role="dialog" aria-modal="true" aria-labelledby="about-title" hidden>
+    <div class="card">
+      <div class="panel-head">
+        <h2 id="about-title">Rangoli<em>Live</em></h2>
+        <button class="icon" data-close aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </div>
+      <p>One rangoli for the whole internet, drawn live by everyone who opens this page.</p>
+      <h3>How the symmetry works</h3>
+      <p>The floor is cut into 8 identical wedges, 4 turns and their mirror images. When you tap, your piece lands in one cell and is drawn in all 8 wedges at once. So even random taps by strangers turn into a pattern, and nobody can draw anything rude.</p>
+      <h3>The rules</h3>
+      <p>One piece every 4 seconds. A new piece replaces whatever was in that cell. The centre lotus takes the colour of whoever tapped it last.</p>
+      <h3>Every day is new</h3>
+      <p>The board clears at midnight IST. Each day's rangoli is kept in the gallery with a timelapse of how it was drawn.</p>
+      <p class="small">No accounts, no names, no text. Your device gets an anonymous ID so the 4 second rule is fair.</p>
+      <p class="credit">Built with Claude Code · Hosted on Embarko</p>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
