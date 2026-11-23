@@ -29,7 +29,7 @@ function layout() {
   const bottom = $('#sheet').getBoundingClientRect().top;
   document.documentElement.style.setProperty('--sheet-h', `${h - bottom}px`);
   const avail = Math.max(120, bottom - top);
-  base = { cx: w / 2, cy: top + avail / 2, s: Math.max(0.5, Math.min(w - 16, avail - 16) / SIZE) };
+  base = { cx: w / 2, cy: top + avail / 2, s: Math.max(0.05, Math.min(w - 16, avail - 16) / SIZE) }; // fit the whole canvas, however big
   zoom = Math.min(zoom, maxZoom());
   board.resize(w, h, view());
 }
