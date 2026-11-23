@@ -7,7 +7,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { compress } from 'hono/compress';
 import { streamSSE, type SSEStreamingApi } from 'hono/streaming';
 import { getConnInfo } from '@hono/node-server/conninfo';
-import { EMPTY, SIZE, validPixel, type WireEvent } from '../shared/pixels.ts';
+import { BANK_SIZE, EMPTY, H, validPixel, W, type WireEvent } from '../shared/pixels.ts';
 import { Limiter, type Bank, type LimitConfig } from './limits.ts';
 import { iconImage, ogImage } from './png.ts';
 
@@ -31,6 +31,7 @@ export function createApp(opts: Options) {
       id INTEGER PRIMARY KEY AUTOINCREMENT, x INTEGER NOT NULL, y INTEGER NOT NULL, colour INTEGER NOT NULL,
       device TEXT NOT NULL, who TEXT NOT NULL, ts INTEGER NOT NULL);
     CREATE INDEX IF NOT EXISTS events_device ON events(device);
+    CREATE INDEX IF NOT EXISTS events_xy ON events(x, y);
     CREATE TABLE IF NOT EXISTS banks (device TEXT PRIMARY KEY, tokens REAL NOT NULL, at INTEGER NOT NULL);
   `);
   const q = {
@@ -41,10 +42,11 @@ export function createApp(opts: Options) {
     exportAll: db.prepare('SELECT id, x, y, colour, device, ts FROM events ORDER BY id'),
     bankGet: db.prepare('SELECT tokens, at FROM banks WHERE device = ?'),
     bankPut: db.prepare('INSERT OR REPLACE INTO banks (device, tokens, at) VALUES (?, ?, ?)'),
+    pixelInfo: db.prepare('SELECT COUNT(*) AS times, MAX(ts) AS ts FROM events WHERE x = ? AND y = ?'),
   };
 
   // ---- the board, kept in memory and rebuilt from the event log on start ----
-  let board = new Uint8Array(SIZE * SIZE);
+  let board = new Uint8Array(W * H);
   let owner: string[] = [];
   let people = new Set<string>();
   let mine = new Map<string, number>();
@@ -53,8 +55,8 @@ export function createApp(opts: Options) {
   let firstTs = 0;
 
   function load() {
-    board = new Uint8Array(SIZE * SIZE).fill(EMPTY);
-    owner = new Array(SIZE * SIZE).fill('');
+    board = new Uint8Array(W * H).fill(EMPTY);
+    owner = new Array(W * H).fill('');
     people = new Set();
     mine = new Map();
     pixels = 0;
@@ -63,7 +65,7 @@ export function createApp(opts: Options) {
     for (const r of q.all.all() as Row[]) apply(r);
   }
   function apply(r: Row) {
-    const i = r.y * SIZE + r.x;
+    const i = r.y * W + r.x;
     board[i] = r.colour;
     owner[i] = r.who;
     people.add(r.device);
@@ -135,7 +137,7 @@ export function createApp(opts: Options) {
   // The board is 1 MB of mostly identical bytes; gzip it here rather than trusting the proxy to.
   app.use('/api/state', compress());
   app.use('/api/log', compress());
-  app.use('/api/*', bodyLimit({ maxSize: 2048, onError: (c) => c.json({ error: 'too_large' }, 413) }));
+  app.use('/api/*', bodyLimit({ maxSize: 4096, onError: (c) => c.json({ error: 'too_large' }, 413) }));
 
   app.get('/api/health', (c) => c.json({ ok: true, rss: process.memoryUsage().rss, clients: clients.size }));
 
@@ -145,26 +147,50 @@ export function createApp(opts: Options) {
     const myPixels: number[] = [];
     if (me) owner.forEach((w, i) => w === me && myPixels.push(i));
     return c.json({
-      size: SIZE, lastId, board: Buffer.from(board).toString('base64'), ...stats(), since: firstTs,
+      w: W, h: H, lastId, board: Buffer.from(board).toString('base64'), ...stats(), since: firstTs,
       mine: me ? mine.get(d) ?? 0 : 0, myPixels,
       tokens: limiter.tokens(me ? d : '', now()),
     });
   });
 
+  // Body: { d, pixels: [[x, y, colour], ...] } with 1..BANK_SIZE pixels. Places as many as the bank
+  // allows, in order, and returns those events; the client rolls back the rest.
   app.post('/api/place', async (c) => {
     const b = await c.req.json().catch(() => null);
-    if (!b || typeof b !== 'object' || typeof b.d !== 'string' || !UUID.test(b.d) || !validPixel(b.x, b.y, b.colour))
+    const list = b?.pixels;
+    if (!b || typeof b !== 'object' || typeof b.d !== 'string' || !UUID.test(b.d) || !Array.isArray(list) ||
+        !list.length || list.length > BANK_SIZE || !list.every((p) => Array.isArray(p) && validPixel(p[0], p[1], p[2])))
       return c.json({ error: 'invalid' }, 400);
     const t = now();
-    const v = limiter.take(b.d, clientIp(c), t);
+    const v = limiter.take(b.d, clientIp(c), t, list.length);
     if (!v.ok) return c.json({ error: v.reason, retryMs: v.retryMs, tokens: v.tokens }, 429);
     const who = whoOf(b.d);
-    const id = Number(q.insert.run(b.x, b.y, b.colour, b.d, who, t).lastInsertRowid);
-    const row: Row = { id, x: b.x, y: b.y, colour: b.colour, device: b.d, who, ts: t };
-    apply(row);
+    const evs: WireEvent[] = [];
+    db.exec('BEGIN');
+    try {
+      for (const [x, y, colour] of list.slice(0, v.count)) {
+        const id = Number(q.insert.run(x, y, colour, b.d, who, t).lastInsertRowid);
+        const row: Row = { id, x, y, colour, device: b.d, who, ts: t };
+        apply(row);
+        evs.push(wire(row));
+      }
+      db.exec('COMMIT');
+    } catch (e) {
+      db.exec('ROLLBACK');
+      load(); // memory may hold rows the database dropped
+      throw e;
+    }
     presence.set(b.d, t);
-    pending.push(wire(row));
-    return c.json({ ev: wire(row), mine: mine.get(b.d), tokens: v.tokens, ...stats() });
+    pending.push(...evs);
+    return c.json({ evs, mine: mine.get(b.d), tokens: v.tokens, ...stats() });
+  });
+
+  // Who-painted-what stays private; this only says how busy a pixel has been.
+  app.get('/api/pixel', (c) => {
+    const x = Number(c.req.query('x')), y = Number(c.req.query('y'));
+    if (!validPixel(x, y, 0)) return c.json({ error: 'invalid' }, 400);
+    const r = q.pixelInfo.get(x, y) as { times: number; ts: number | null };
+    return c.json({ x, y, colour: board[y * W + x], times: r.times, ts: r.ts });
   });
 
   app.post('/api/hello', async (c) => {
@@ -204,7 +230,7 @@ export function createApp(opts: Options) {
   // shortcut: sends every event at once (~10 bytes each), fine to ~500k events; sample or paginate beyond that.
   app.get('/api/log', (c) => {
     const ev = (q.log.all() as Pick<Row, 'x' | 'y' | 'colour'>[]).flatMap((r) => [r.x, r.y, r.colour]);
-    return c.json({ size: SIZE, since: firstTs, pixels, people: people.size, ev });
+    return c.json({ w: W, h: H, since: firstTs, pixels, people: people.size, ev });
   });
 
   // ---- images rendered by the server, so the deploy has no binary files ----
@@ -246,7 +272,7 @@ export function createApp(opts: Options) {
   });
   admin.get('/export', (c) => {
     c.header('content-disposition', 'attachment; filename="pixelworld.json"');
-    return c.json({ size: SIZE, events: q.exportAll.all() });
+    return c.json({ w: W, h: H, events: q.exportAll.all() });
   });
   app.route('/api/admin', admin);
 

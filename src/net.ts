@@ -1,7 +1,7 @@
 import type { WireEvent } from '../shared/pixels.ts';
 
 export type Stats = { pixels: number; people: number; online: number };
-export type State = Stats & { size: number; lastId: number; board: string; since: number; mine: number; myPixels: number[]; tokens: number };
+export type State = Stats & { w: number; h: number; lastId: number; board: string; since: number; mine: number; myPixels: number[]; tokens: number };
 type Msg = Partial<Stats> & { e?: WireEvent[]; lastId?: number; reload?: boolean };
 
 const KEY = 'pw.device';

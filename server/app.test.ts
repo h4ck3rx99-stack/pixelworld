@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { inflateSync } from 'node:zlib';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { BANK_SIZE, EMPTY, REGEN_MS, SIZE } from '../shared/pixels.ts';
+import { BANK_SIZE, EMPTY, H, REGEN_MS, W } from '../shared/pixels.ts';
 import { createApp } from './app.ts';
 
 const D1 = '11111111-1111-4111-8111-111111111111';
@@ -22,8 +22,10 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 type App = ReturnType<typeof boot>;
-const place = (app: App, body: object) =>
+type One = { d: string; x: number; y: number; colour: number };
+const post = (app: App, body: object) =>
   app.request('/api/place', { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json', 'x-forwarded-for': '1.2.3.4' } });
+const place = (app: App, { d, x, y, colour }: One) => post(app, { d, pixels: [[x, y, colour]] });
 const boardOf = (s: { board: string }) => new Uint8Array(Buffer.from(s.board, 'base64'));
 
 describe('server', () => {
@@ -34,21 +36,21 @@ describe('server', () => {
     const body = await ok.json();
     expect(body.mine).toBe(1);
     expect(body.tokens).toBe(BANK_SIZE - 1);
-    expect(body.ev.slice(1, 4)).toEqual([3, 7, 5]);
+    expect(body.evs[0].slice(1, 4)).toEqual([3, 7, 5]);
 
-    expect((await place(app, { d: D2, x: SIZE, y: 0, colour: 0 })).status).toBe(400);
+    expect((await place(app, { d: D2, x: W, y: 0, colour: 0 })).status).toBe(400);
     expect((await place(app, { d: 'nope', x: 0, y: 0, colour: 0 })).status).toBe(400);
 
     expect((await place(app, { d: D1, x: 3, y: 7, colour: 9 })).status).toBe(200); // overwrites the pixel
 
     const state = await (await app.request(`/api/state?d=${D1}`)).json();
     const board = boardOf(state);
-    expect(board.length).toBe(SIZE * SIZE);
-    expect(board[7 * SIZE + 3]).toBe(9);
+    expect(board.length).toBe(W * H);
+    expect(board[7 * W + 3]).toBe(9);
     expect(board[0]).toBe(EMPTY);
-    expect(state).toMatchObject({ pixels: 2, people: 1, mine: 2, myPixels: [7 * SIZE + 3], tokens: BANK_SIZE - 2 });
+    expect(state).toMatchObject({ pixels: 2, people: 1, mine: 2, myPixels: [7 * W + 3], tokens: BANK_SIZE - 2 });
 
-    const delta = await (await app.request(`/api/events?since=${body.ev[0]}`)).json();
+    const delta = await (await app.request(`/api/events?since=${body.evs[0][0]}`)).json();
     expect(delta.e.length).toBe(1);
     expect((await (await app.request(`/api/events?since=999`)).json()).reload).toBe(true);
 
@@ -62,7 +64,7 @@ describe('server', () => {
     inst!.close();
     inst = createApp({ dataDir: dir, limits: { ipPerMin: 1000, ipDaily: 100_000 }, now: () => t });
     const s = await (await inst.app.request('/api/state')).json();
-    expect(boardOf(s)[2 * SIZE + 1]).toBe(3);
+    expect(boardOf(s)[2 * W + 1]).toBe(3);
     expect(s.pixels).toBe(1);
   });
 
@@ -77,6 +79,32 @@ describe('server', () => {
     expect((await place(inst.app, { d: D2, x: 0, y: 1, colour: 1 })).status).toBe(429); // restart did not refill it
     t += REGEN_MS;
     expect((await place(inst.app, { d: D2, x: 0, y: 1, colour: 1 })).status).toBe(200);
+  });
+
+  it('places a whole batch at once, but never more than the bank holds', async () => {
+    const app = boot();
+    const batch = (n: number, y: number) => Array.from({ length: n }, (_, i) => [i, y, 4]);
+    const r1 = await (await post(app, { d: D1, pixels: batch(60, 0) })).json();
+    expect(r1.evs.length).toBe(60);
+    expect(r1.tokens).toBe(BANK_SIZE - 60);
+    const r2 = await (await post(app, { d: D1, pixels: batch(10, 1) })).json();
+    expect(r2.evs.length).toBe(4); // only 4 left in the bank
+    expect((await post(app, { d: D1, pixels: batch(1, 2) })).status).toBe(429);
+    expect((await post(app, { d: D2, pixels: batch(BANK_SIZE + 1, 3) })).status).toBe(400);
+    expect((await post(app, { d: D2, pixels: [] })).status).toBe(400);
+    expect((await post(app, { d: D2, pixels: [[0, 0, 1], [W, 0, 1]] })).status).toBe(400); // one bad pixel rejects the batch
+    const s = await (await app.request('/api/state')).json();
+    expect(s.pixels).toBe(64);
+  });
+
+  it('reports how busy a pixel has been', async () => {
+    const app = boot();
+    await place(app, { d: D1, x: 9, y: 9, colour: 1 });
+    await place(app, { d: D2, x: 9, y: 9, colour: 2 });
+    const info = await (await app.request('/api/pixel?x=9&y=9')).json();
+    expect(info).toMatchObject({ x: 9, y: 9, colour: 2, times: 2, ts: t });
+    expect(await (await app.request('/api/pixel?x=0&y=0')).json()).toMatchObject({ times: 0, ts: null, colour: EMPTY });
+    expect((await app.request(`/api/pixel?x=${W}&y=0`)).status).toBe(400);
   });
 
   it('renders the link preview and icons as real PNGs', async () => {
@@ -103,7 +131,7 @@ describe('server', () => {
     expect((await purge.json()).deleted).toBe(1);
     const s = await (await app.request('/api/state')).json();
     expect(s.pixels).toBe(0);
-    expect(boardOf(s)[5 * SIZE + 5]).toBe(EMPTY);
+    expect(boardOf(s)[5 * W + 5]).toBe(EMPTY);
     expect((await app.request('/api/admin/export', { headers: auth })).status).toBe(200);
   });
 });

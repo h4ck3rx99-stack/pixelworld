@@ -1,7 +1,7 @@
 import { BANK_SIZE, REGEN_MS, utcDay } from '../shared/pixels.ts';
 
 export type LimitConfig = { ipPerMin: number; ipDaily: number };
-export type Verdict = { ok: true; tokens: number } | { ok: false; reason: 'empty' | 'rate' | 'daily'; retryMs: number; tokens: number };
+export type Verdict = { ok: true; tokens: number; count: number } | { ok: false; reason: 'empty' | 'rate' | 'daily'; retryMs: number; tokens: number };
 export type Bank = { tokens: number; at: number };
 /** Where banks live; the server backs this with SQLite so a restart doesn't refill everyone. */
 export type BankStore = { get(device: string): Bank | undefined; set(device: string, b: Bank): void };
@@ -32,8 +32,11 @@ export class Limiter {
     return tokensAt(this.store.get(device), now);
   }
 
-  /** Checks every limit and, if all pass, spends one pixel from the device's bank. */
-  take(device: string, ip: string, now: number): Verdict {
+  /**
+   * Spends up to `n` pixels from the device's bank, as many as every limit allows.
+   * `count` says how many were granted; the caller places that many and drops the rest.
+   */
+  take(device: string, ip: string, now: number, n = 1): Verdict {
     const day = utcDay(now);
     if (day !== this.day) (this.day = day), this.daily.clear();
 
@@ -43,13 +46,15 @@ export class Limiter {
     let w = this.ipWin.get(ip);
     if (!w || now - w.start >= 60_000) w = { start: now, n: 0 };
     if (w.n >= this.cfg.ipPerMin) return { ok: false, reason: 'rate', retryMs: w.start + 60_000 - now, tokens };
-    if ((this.daily.get(ip) ?? 0) >= this.cfg.ipDaily) return { ok: false, reason: 'daily', retryMs: 0, tokens };
+    const usedToday = this.daily.get(ip) ?? 0;
+    if (usedToday >= this.cfg.ipDaily) return { ok: false, reason: 'daily', retryMs: 0, tokens };
 
-    this.store.set(device, { tokens: tokens - 1, at: now });
-    w.n++;
+    const count = Math.min(n, Math.floor(tokens), this.cfg.ipPerMin - w.n, this.cfg.ipDaily - usedToday);
+    this.store.set(device, { tokens: tokens - count, at: now });
+    w.n += count;
     this.ipWin.set(ip, w);
-    this.daily.set(ip, (this.daily.get(ip) ?? 0) + 1);
-    return { ok: true, tokens: tokens - 1 };
+    this.daily.set(ip, usedToday + count);
+    return { ok: true, tokens: tokens - count, count };
   }
 
   prune(now: number) {

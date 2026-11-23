@@ -1,15 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { PALETTE, PALETTE_NAMES, SIZE, utcDay, validPixel } from './pixels.ts';
+import { H, PALETTE, PALETTE_NAMES, utcDay, validPixel, W } from './pixels.ts';
 
 describe('pixels', () => {
   it('validates coordinates and colours', () => {
     expect(validPixel(0, 0, 0)).toBe(true);
-    expect(validPixel(SIZE - 1, SIZE - 1, PALETTE.length - 1)).toBe(true);
-    expect(validPixel(SIZE, 0, 0)).toBe(false);
+    expect(validPixel(W - 1, H - 1, PALETTE.length - 1)).toBe(true);
+    expect(validPixel(W, 0, 0)).toBe(false);
+    expect(validPixel(0, H, 0)).toBe(false);
     expect(validPixel(0, -1, 0)).toBe(false);
     expect(validPixel(0, 0, PALETTE.length)).toBe(false);
     expect(validPixel(1.5, 0, 0)).toBe(false);
     expect(validPixel('1', 0, 0)).toBe(false);
+  });
+
+  it('is a portrait canvas', () => {
+    expect(H).toBeGreaterThan(W);
   });
 
   it('has a name for every colour', () => {

@@ -1,4 +1,4 @@
-import { EMPTY, SIZE } from '../shared/pixels.ts';
+import { EMPTY, H, W } from '../shared/pixels.ts';
 import { bell, prime, soundOn } from './audio.ts';
 import { Board } from './board.ts';
 import { getJSON } from './net.ts';
@@ -16,7 +16,7 @@ function layoutTl() {
   if (!tl) return;
   const w = innerWidth, h = innerHeight;
   const rec = $('#tl').classList.contains('rec');
-  const s = Math.min(w - 24, h * (rec ? 0.66 : 0.62)) / SIZE;
+  const s = Math.min((w - 24) / W, (h * (rec ? 0.66 : 0.6)) / H);
   tl.resize(w, h, { cx: w / 2, cy: h * (rec ? 0.5 : 0.47), s });
 }
 
@@ -33,7 +33,7 @@ export async function openTimelapse(record: boolean) {
   tl.onFrame = frame;
   addEventListener('resize', layoutTl);
   layoutTl();
-  tl.load(new Uint8Array(SIZE * SIZE).fill(EMPTY));
+  tl.load(new Uint8Array(W * H).fill(EMPTY));
   $('#tl-count').textContent = 'Loading…';
   let log: { since: number; pixels: number; people: number; ev: number[] };
   try {
@@ -55,7 +55,7 @@ function start() {
   if (!play || !tl) return;
   if (soundOn() || $('#tl').classList.contains('rec')) prime();
   $('#tl').classList.remove('done');
-  tl.load(new Uint8Array(SIZE * SIZE).fill(EMPTY));
+  tl.load(new Uint8Array(W * H).fill(EMPTY));
   Object.assign(play, { start: performance.now() + 500, i: 0, rung: false });
   tl.kick();
 }
@@ -68,7 +68,7 @@ function frame(now: number) {
   const calm = target - play.i <= 2; // flash only while pixels arrive a few at a time
   for (; play.i < target; play.i++) {
     const o = play.i * 3;
-    tl.set(play.ev[o + 1] * SIZE + play.ev[o], play.ev[o + 2], calm);
+    tl.set(play.ev[o + 1] * W + play.ev[o], play.ev[o + 2], calm);
   }
   if (t >= 1 && !play.rung) {
     play.rung = true;
@@ -106,7 +106,7 @@ $('#tl-replay').addEventListener('click', start);
 $('#tl-record').addEventListener('click', () => {
   $('#tl').classList.add('rec');
   layoutTl();
-  tl?.load(new Uint8Array(SIZE * SIZE).fill(EMPTY));
+  tl?.load(new Uint8Array(W * H).fill(EMPTY));
   if (play) play.start = 0;
   showRecHint();
 });

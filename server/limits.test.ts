@@ -31,6 +31,27 @@ describe('pixel bank', () => {
   });
 });
 
+describe('batches', () => {
+  it('spends a whole batch at once', () => {
+    const l = new Limiter(cfg);
+    expect(l.take('a', 'ip', T, 10)).toMatchObject({ ok: true, count: 10 });
+    expect(l.tokens('a', T)).toBe(BANK_SIZE - 10);
+  });
+
+  it('grants only what the bank holds and drops the rest', () => {
+    const l = new Limiter(cfg);
+    l.take('a', 'ip', T, BANK_SIZE - 3);
+    expect(l.take('a', 'ip', T, 10)).toMatchObject({ ok: true, count: 3 });
+    expect(l.take('a', 'ip', T, 1)).toMatchObject({ ok: false, reason: 'empty' });
+  });
+
+  it('never grants past the per-IP minute limit', () => {
+    const l = new Limiter({ ...cfg, ipPerMin: 5 });
+    expect(l.take('a', 'ip', T, 20)).toMatchObject({ ok: true, count: 5 });
+    expect(l.tokens('a', T)).toBe(BANK_SIZE - 5); // ungranted pixels stay in the bank
+  });
+});
+
 describe('IP limits', () => {
   it('rate limits an IP across many devices, then recovers', () => {
     const l = new Limiter({ ...cfg, ipPerMin: 5 });

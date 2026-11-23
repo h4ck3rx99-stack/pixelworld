@@ -1,18 +1,18 @@
-import { EMPTY, PALETTE, PAPER, SIZE } from '../shared/pixels.ts';
+import { EMPTY, H, PALETTE, PAPER, W } from '../shared/pixels.ts';
 
 const RGB = [...PALETTE, PAPER].map((h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)));
 const rgbOf = (c: number) => RGB[c === EMPTY ? PALETTE.length : c];
 export const BG = '#0E1020';
 
 /**
- * One SIZE x SIZE pixel canvas drawn crisp at any zoom. The pixels live on a 1:1 offscreen
+ * One W x H pixel canvas drawn crisp at any zoom. The pixels live on a 1:1 offscreen
  * canvas; each frame is a single scaled drawImage, so the cost does not grow with activity.
  */
 export class Board {
   readonly g: CanvasRenderingContext2D;
   readonly px = document.createElement('canvas');
   private pg: CanvasRenderingContext2D;
-  colours: Uint8Array = new Uint8Array(SIZE * SIZE).fill(EMPTY);
+  colours: Uint8Array = new Uint8Array(W * H).fill(EMPTY);
   w = 0;
   h = 0;
   dpr = 1;
@@ -26,7 +26,8 @@ export class Board {
 
   constructor(readonly cv: HTMLCanvasElement) {
     this.g = cv.getContext('2d')!;
-    this.px.width = this.px.height = SIZE;
+    this.px.width = W;
+    this.px.height = H;
     this.pg = this.px.getContext('2d')!;
     this.load(this.colours);
   }
@@ -49,7 +50,7 @@ export class Board {
 
   load(colours: Uint8Array) {
     this.colours = colours;
-    const img = this.pg.createImageData(SIZE, SIZE);
+    const img = this.pg.createImageData(W, H);
     const px = new Uint32Array(img.data.buffer); // one write per pixel (RGBA, little-endian)
     const packed = new Uint32Array(256).map((_, c) => {
       const [r, g, b] = rgbOf(c < PALETTE.length ? c : EMPTY);
@@ -64,7 +65,7 @@ export class Board {
   set(i: number, colour: number, flash = true) {
     this.colours[i] = colour;
     this.pg.fillStyle = colour === EMPTY ? PAPER : PALETTE[colour];
-    this.pg.fillRect(i % SIZE, (i / SIZE) | 0, 1, 1);
+    this.pg.fillRect(i % W, (i / W) | 0, 1, 1);
     if (flash) this.flashes.push({ i, start: performance.now() });
     this.kick();
   }
@@ -72,14 +73,14 @@ export class Board {
   /** Screen (css px) -> board pixel index, or -1 outside the board. */
   pixelAt(x: number, y: number) {
     const { cx, cy, s } = this.view;
-    const bx = Math.floor((x - cx) / s + SIZE / 2), by = Math.floor((y - cy) / s + SIZE / 2);
-    return bx < 0 || by < 0 || bx >= SIZE || by >= SIZE ? -1 : by * SIZE + bx;
+    const bx = Math.floor((x - cx) / s + W / 2), by = Math.floor((y - cy) / s + H / 2);
+    return bx < 0 || by < 0 || bx >= W || by >= H ? -1 : by * W + bx;
   }
 
   /** Device-pixel rectangle of a board pixel. */
   rectOf(i: number) {
     const { cx, cy, s } = this.view, d = this.dpr;
-    return [(cx + (i % SIZE - SIZE / 2) * s) * d, (cy + (((i / SIZE) | 0) - SIZE / 2) * s) * d, s * d] as const;
+    return [(cx + (i % W - W / 2) * s) * d, (cy + (((i / W) | 0) - H / 2) * s) * d, s * d] as const;
   }
 
   kick() {
@@ -90,7 +91,7 @@ export class Board {
     this.raf = 0;
     let more = this.onFrame?.(now) ?? false;
     const g = this.g, d = this.dpr, { cx, cy, s } = this.view;
-    const size = SIZE * s * d, x0 = (cx * d - size / 2), y0 = (cy * d - size / 2);
+    const bw = W * s * d, bh = H * s * d, x0 = cx * d - bw / 2, y0 = cy * d - bh / 2;
     g.setTransform(1, 0, 0, 1, 0, 0);
     g.fillStyle = BG;
     g.fillRect(0, 0, this.cv.width, this.cv.height);
@@ -98,10 +99,10 @@ export class Board {
     g.shadowBlur = 40 * d;
     g.shadowOffsetY = 12 * d;
     g.fillStyle = PAPER;
-    g.fillRect(x0, y0, size, size);
+    g.fillRect(x0, y0, bw, bh);
     g.shadowColor = 'transparent';
     g.imageSmoothingEnabled = false;
-    g.drawImage(this.px, x0, y0, size, size);
+    g.drawImage(this.px, x0, y0, bw, bh);
 
     // faint grid once pixels are big enough to aim at
     const cell = s * d;
@@ -109,8 +110,8 @@ export class Board {
       g.strokeStyle = `rgba(14,16,32,${Math.min(0.14, (cell - 10) / 60)})`;
       g.lineWidth = 1;
       g.beginPath();
-      const a = Math.max(0, Math.floor(-x0 / cell)), b = Math.min(SIZE, Math.ceil((this.cv.width - x0) / cell));
-      const c = Math.max(0, Math.floor(-y0 / cell)), e = Math.min(SIZE, Math.ceil((this.cv.height - y0) / cell));
+      const a = Math.max(0, Math.floor(-x0 / cell)), b = Math.min(W, Math.ceil((this.cv.width - x0) / cell));
+      const c = Math.max(0, Math.floor(-y0 / cell)), e = Math.min(H, Math.ceil((this.cv.height - y0) / cell));
       for (let i = a; i <= b; i++) g.moveTo(Math.round(x0 + i * cell) + 0.5, y0 + c * cell), g.lineTo(Math.round(x0 + i * cell) + 0.5, y0 + e * cell);
       for (let j = c; j <= e; j++) g.moveTo(x0 + a * cell, Math.round(y0 + j * cell) + 0.5), g.lineTo(x0 + b * cell, Math.round(y0 + j * cell) + 0.5);
       g.stroke();

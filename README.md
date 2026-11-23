@@ -1,9 +1,13 @@
 # PixelWorld
 
-One shared pixel canvas for the whole internet. Everyone paints on the same 1000 × 1000 grid,
-live, from their phones. Tap a pixel, pick one of 16 colours, press Place. Everyone starts with
-64 pixels in their bank and gets one back every 30 seconds (up to 64). The canvas never resets,
-and the timelapse replays its whole history.
+One shared pixel canvas for the whole internet. Everyone paints on the same 1200 × 1800 grid
+(portrait, so it fills a phone), live. Pick one of 16 colours and draft pixels by tapping
+(Move mode) or dragging (Draw mode), then press Place once to put them all up. Everyone has a
+bank of up to 64 pixels that refills one every 30 seconds. The canvas never resets, and the
+timelapse replays its whole history.
+
+Tools: **Pick** (copy a pixel's colour), **Clear** (drop drafts), **Mine** (highlight your
+pixels), and tapping any pixel shows how often it has been painted and when.
 
 ## Run locally
 
@@ -24,7 +28,7 @@ Needs Node 22.13+ (uses the built-in `node:sqlite`; `.node-version` pins 22 for 
 Tests and checks:
 
 ```sh
-npm test           # validation, pixel bank, IP limits, API, restart rebuild
+npm test           # validation, pixel bank, batches, IP limits, API, pixel info, restart rebuild
 npm run typecheck
 npm run sim -- --clients 50 --transport mixed --seconds 60 --seed 6000 --keep
 ```
@@ -88,7 +92,10 @@ Set `ADMIN_SECRET` in the app's env vars on Embarko.
   within 4 s or the stream keeps failing.
 - **Pixel bank** (`server/limits.ts`): a token bucket per device, stored in SQLite so a restart
   doesn't refill everyone. The client mirrors it to show the count and the "+1 in 0:29" timer.
-- **Rendering** (`src/board.ts`): Canvas 2D. Pixels live on a 1000 × 1000 offscreen canvas;
+- **Batches**: `POST /api/place {d, pixels: [[x, y, colour], …]}` places up to 64 in one
+  transaction, as many as the bank allows; the client keeps the rest as drafts.
+- **Pixel info**: `GET /api/pixel?x=&y=` returns how many times a pixel was painted and when (never who).
+- **Rendering** (`src/board.ts`): Canvas 2D. Pixels live on a 1200 × 1800 offscreen canvas;
   each frame is one scaled `drawImage` with smoothing off, plus a faint grid when zoomed in.
 - **Timelapse** (`src/timelapse.ts`): `GET /api/log` returns the whole history as flat
   `[x, y, colour, …]`, replayed over ~20 s.

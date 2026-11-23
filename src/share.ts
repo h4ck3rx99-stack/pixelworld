@@ -1,44 +1,44 @@
-import { PAPER, SIZE } from '../shared/pixels.ts';
+import { H as BH, PAPER, W as BW } from '../shared/pixels.ts';
 import { BG } from './board.ts';
 import { fmt } from './ui.ts';
 
 /** 1080x1920 story card of the current canvas, shared through the Web Share API or downloaded. */
 export async function shareCard(pixels: HTMLCanvasElement, s: { people: number; pixels: number; mine: number }) {
   await Promise.all([document.fonts.load('800 80px "Inter Variable"'), document.fonts.load('500 40px "Inter Variable"')]);
-  const W = 1080, H = 1920, side = 960;
+  const W = 1080, H = 1920, k = 1200 / BH, bw = BW * k, bh = BH * k; // canvas box 800 x 1200
   const cv = document.createElement('canvas');
   cv.width = W;
   cv.height = H;
   const g = cv.getContext('2d')!;
   g.fillStyle = BG;
   g.fillRect(0, 0, W, H);
-  const x0 = (W - side) / 2, y0 = 470;
+  const x0 = (W - bw) / 2, y0 = 380;
   g.shadowColor = 'rgba(0,0,0,0.6)';
   g.shadowBlur = 60;
   g.shadowOffsetY = 18;
   g.fillStyle = PAPER;
-  g.fillRect(x0, y0, side, side);
+  g.fillRect(x0, y0, bw, bh);
   g.shadowColor = 'transparent';
-  g.imageSmoothingEnabled = SIZE > side; // shrinking a big canvas reads better smoothed; enlarging stays crisp
-  g.drawImage(pixels, x0, y0, side, side);
+  g.imageSmoothingEnabled = k < 1; // shrinking a big canvas reads better smoothed; enlarging stays crisp
+  g.drawImage(pixels, x0, y0, bw, bh);
 
   g.textAlign = 'center';
-  wordmark(g, W / 2, 250, 112);
+  wordmark(g, W / 2, 200, 104);
   g.font = '500 40px "Inter Variable", system-ui, sans-serif';
   g.fillStyle = 'rgba(244,241,234,0.66)';
-  g.fillText('One canvas. The whole world.', W / 2, 330);
+  g.fillText('One canvas. The whole world.', W / 2, 275);
 
   g.fillStyle = '#F4F1EA';
   g.font = '700 58px "Inter Variable", system-ui, sans-serif';
-  g.fillText(`${fmt(s.pixels)} pixels by ${fmt(s.people)} ${s.people === 1 ? 'person' : 'people'}`, W / 2, 1570);
+  g.fillText(`${fmt(s.pixels)} pixels by ${fmt(s.people)} ${s.people === 1 ? 'person' : 'people'}`, W / 2, 1680);
   if (s.mine) {
     g.fillStyle = '#FFD93B';
     g.font = '700 46px "Inter Variable", system-ui, sans-serif';
-    g.fillText(`I placed ${fmt(s.mine)} of them`, W / 2, 1650);
+    g.fillText(`I placed ${fmt(s.mine)} of them`, W / 2, 1755);
   }
   g.fillStyle = 'rgba(244,241,234,0.6)';
   g.font = '500 38px "Inter Variable", system-ui, sans-serif';
-  g.fillText(`Add yours → ${location.host}`, W / 2, 1830);
+  g.fillText(`Add yours → ${location.host}`, W / 2, 1860);
 
   const blob = await new Promise<Blob>((ok, no) => cv.toBlob((b) => (b ? ok(b) : no(new Error('toBlob'))), 'image/png'));
   const file = new File([blob], 'pixelworld.png', { type: 'image/png' });

@@ -1,6 +1,6 @@
 import '@fontsource-variable/inter';
 import './style.css';
-import { BANK_SIZE, PALETTE, PALETTE_NAMES, REGEN_MS, SIZE, type WireEvent } from '../shared/pixels.ts';
+import { BANK_SIZE, EMPTY, H, PALETTE, PALETTE_NAMES, REGEN_MS, W, type WireEvent } from '../shared/pixels.ts';
 import { chime, setSound, soundOn } from './audio.ts';
 import { Board } from './board.ts';
 import { deviceId, getJSON, Live, myWho, postJSON, type State } from './net.ts';
@@ -10,11 +10,14 @@ import { $, closeTop, fmt, openPanel, store } from './ui.ts';
 
 const board = new Board($<HTMLCanvasElement>('#board'));
 const st = { lastId: 0, pixels: 0, people: 0, online: -1, mine: 0, since: 0 };
-const ids = new Int32Array(SIZE * SIZE); // id of the last event applied to each pixel
+const ids = new Int32Array(W * H); // id of the last event applied to each pixel
 const myPixels = new Set<number>();
+const drafts = new Map<number, number>(); // pixel index -> colour, waiting for Place
 let who = '';
-let selected = -1;
+let lastTapped = -1;
 let highlightUntil = 0;
+let mode: 'move' | 'draw' = store.get('pw.mode') === 'draw' ? 'draw' : 'move';
+let picking = false; // the colour picker is armed for the next tap
 let colour = (() => {
   const c = Number(store.get('pw.colour') ?? 5); // first visit: red, never white on white paper
   return Number.isInteger(c) && c >= 0 && c < PALETTE.length ? c : 5;
@@ -29,7 +32,8 @@ function layout() {
   const bottom = $('#sheet').getBoundingClientRect().top;
   document.documentElement.style.setProperty('--sheet-h', `${h - bottom}px`);
   const avail = Math.max(120, bottom - top);
-  base = { cx: w / 2, cy: top + avail / 2, s: Math.max(0.05, Math.min(w - 16, avail - 16) / SIZE) }; // fit the whole canvas, however big
+  // fit the whole canvas, however big
+  base = { cx: w / 2, cy: top + avail / 2, s: Math.max(0.05, Math.min((w - 16) / W, (avail - 12) / H)) };
   zoom = Math.min(zoom, maxZoom());
   board.resize(w, h, view());
 }
@@ -43,9 +47,9 @@ function setZoom(z: number, ax: number, ay: number) {
   clampPan();
 }
 function clampPan() {
-  const lim = (base.s * SIZE * (zoom - 1)) / 2;
-  panX = Math.max(-lim, Math.min(lim, panX));
-  panY = Math.max(-lim, Math.min(lim, panY));
+  const lx = (base.s * W * (zoom - 1)) / 2, ly = (base.s * H * (zoom - 1)) / 2;
+  panX = Math.max(-lx, Math.min(lx, panX));
+  panY = Math.max(-ly, Math.min(ly, panY));
   board.setView(view());
 }
 function animateZoom(z1: number, ax: number, ay: number) {
@@ -58,19 +62,30 @@ function animateZoom(z1: number, ax: number, ay: number) {
   requestAnimationFrame(step);
 }
 
+// ---------- pointer: one finger pans (Move) or paints drafts (Draw); two fingers always pinch ----------
 const pts = new Map<number, { x: number; y: number; x0: number; y0: number }>();
 let pinch: { d: number; z: number } | null = null;
 let moved = false;
+let stroke: number | null = null; // last pixel of the current Draw stroke
 let lastTap = { t: 0, x: 0, y: 0 };
 const cv = board.cv;
 cv.addEventListener('pointerdown', (e) => {
   cv.setPointerCapture(e.pointerId);
   pts.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY });
-  if (pts.size === 1) moved = false;
+  if (pts.size === 1) {
+    moved = false;
+    if (mode === 'draw' && !picking) {
+      dismissHint();
+      const i = board.pixelAt(e.clientX, e.clientY);
+      stroke = i;
+      if (i >= 0) paintDraft(i), showInfo(i);
+    }
+  }
   if (pts.size === 2) {
     const [a, b] = [...pts.values()];
     pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), z: zoom };
     moved = true;
+    stroke = null;
   }
 });
 cv.addEventListener('pointermove', (e) => {
@@ -84,6 +99,12 @@ cv.addEventListener('pointermove', (e) => {
     panX += dx / 2;
     panY += dy / 2;
     setZoom((pinch.z * Math.hypot(a.x - b.x, a.y - b.y)) / pinch.d, (a.x + b.x) / 2, (a.y + b.y) / 2);
+  } else if (pts.size === 1 && stroke !== null) {
+    const i = board.pixelAt(e.clientX, e.clientY);
+    if (i >= 0 && i !== stroke) {
+      for (const j of line(stroke < 0 ? i : stroke, i)) paintDraft(j);
+      stroke = i;
+    }
   } else if (pts.size === 1 && (moved || Math.hypot(p.x - p.x0, p.y - p.y0) > 8)) {
     moved = true;
     if (zoom > 1) (panX += dx), (panY += dy), clampPan();
@@ -93,12 +114,14 @@ const up = (e: PointerEvent) => {
   const p = pts.get(e.pointerId);
   pts.delete(e.pointerId);
   if (pts.size < 2) pinch = null;
-  if (!p || moved || e.type === 'pointercancel' || pts.size) return;
+  const wasStroke = stroke !== null;
+  if (!pts.size) stroke = null;
+  if (!p || moved || wasStroke || e.type === 'pointercancel' || pts.size) return;
   const dbl = e.timeStamp - lastTap.t < 320 && Math.hypot(p.x - lastTap.x, p.y - lastTap.y) < 40;
   lastTap = { t: e.timeStamp, x: p.x, y: p.y };
   dismissHint();
-  if (dbl) return animateZoom(zoom > 1.5 ? 1 : Math.min(maxZoom(), 16 / base.s), p.x, p.y); // double-tap: dive in to ~16px pixels / back out
-  select(board.pixelAt(p.x, p.y));
+  if (dbl && !picking) return animateZoom(zoom > 1.5 ? 1 : Math.min(maxZoom(), 16 / base.s), p.x, p.y); // dive in / back out
+  tapPixel(board.pixelAt(p.x, p.y));
 };
 cv.addEventListener('pointerup', up);
 cv.addEventListener('pointercancel', up);
@@ -107,15 +130,58 @@ cv.addEventListener('wheel', (e) => {
   setZoom(zoom * Math.exp(-e.deltaY * 0.0015), e.clientX, e.clientY);
 }, { passive: false });
 
-// ---------- selecting & placing ----------
-const placeBtn = $<HTMLButtonElement>('#place');
-function select(i: number) {
-  selected = i;
+/** Pixels on the straight line between two pixels, so a fast drag leaves no gaps. */
+function line(a: number, b: number) {
+  const ax = a % W, ay = (a / W) | 0, bx = b % W, by = (b / W) | 0;
+  const n = Math.max(Math.abs(bx - ax), Math.abs(by - ay));
+  return Array.from({ length: n }, (_, k) => Math.round(ay + ((by - ay) * (k + 1)) / n) * W + Math.round(ax + ((bx - ax) * (k + 1)) / n));
+}
+
+// ---------- drafts ----------
+const pixelsLeft = () => Math.floor(tokensNow()) - drafts.size;
+let warnedFull = 0;
+function outOfPixels() {
+  if (Date.now() - warnedFull < 2500) return;
+  warnedFull = Date.now();
+  navigator.vibrate?.([6, 50, 6]);
+  toast(Math.floor(tokensNow()) ? `That's all ${Math.floor(tokensNow())} of your pixels. Press Place.` : 'Out of pixels. One comes back every 30 seconds.');
+}
+
+/** Draw-mode painting: adds a draft, never removes one. Skips pixels that already have this colour. */
+function paintDraft(i: number) {
+  if (drafts.get(i) === colour || (!drafts.has(i) && board.colours[i] === colour)) return;
+  if (!drafts.has(i) && pixelsLeft() <= 0) return outOfPixels();
+  drafts.set(i, colour);
   paintPlace();
   board.kick();
 }
 
-// Pixel bank: start with BANK_SIZE, one comes back every REGEN_MS. The server enforces it; this mirrors it.
+/** A tap: picks a colour, or toggles/recolours a draft. */
+function tapPixel(i: number) {
+  if (i < 0) return;
+  showInfo(i);
+  if (picking) {
+    const c = drafts.get(i) ?? board.colours[i];
+    setPicking(false);
+    if (c === EMPTY) return toast('That pixel is still blank.');
+    pick(c);
+    return toast(`Picked ${PALETTE_NAMES[c]}`);
+  }
+  if (drafts.get(i) === colour) drafts.delete(i);
+  else if (drafts.has(i) || pixelsLeft() > 0) drafts.set(i, colour);
+  else outOfPixels();
+  paintPlace();
+  board.kick();
+}
+
+function clearDrafts() {
+  drafts.clear();
+  paintPlace();
+  board.kick();
+}
+
+// ---------- the pixel bank and Place ----------
+const placeBtn = $<HTMLButtonElement>('#place');
 let bank = { tokens: BANK_SIZE, at: Date.now() };
 let blockedUntil = 0; // set when the network as a whole is rate limited
 let inflight = 0;
@@ -124,73 +190,105 @@ const clock = (ms: number) => `${Math.floor(ms / 60000)}:${String(Math.ceil(ms /
 
 function paintPlace() {
   const t = tokensNow(), n = Math.floor(t);
-  const wait = Math.max(blockedUntil - Date.now(), n < 1 ? (1 - t) * REGEN_MS : 0);
-  placeBtn.disabled = selected < 0 || wait > 0;
-  $('#place-label').textContent = wait > 0 ? `Next pixel in ${clock(wait)}` : selected < 0 ? 'Tap a pixel first' : 'Place pixel';
-  $('#place-xy').textContent = selected < 0 ? '' : `${selected % SIZE}, ${(selected / SIZE) | 0}`;
-  $('#bank b').textContent = String(n);
+  const blocked = Math.max(0, blockedUntil - Date.now());
+  const ready = Math.min(drafts.size, n);
+  placeBtn.disabled = !ready || blocked > 0;
+  $('#place-label').textContent =
+    blocked ? `Try again in ${clock(blocked)}`
+    : ready ? `Place ${ready} pixel${ready === 1 ? '' : 's'}`
+    : n < 1 ? `Next pixel in ${clock((1 - t) * REGEN_MS)}`
+    : mode === 'draw' ? 'Drag on the canvas to draw' : 'Tap pixels to draft them';
+  $('#place-xy').textContent = drafts.size > n ? `${drafts.size - n} more than you have` : '';
+  $('#bank b').textContent = String(Math.max(0, n - drafts.size));
   $('#bank small').textContent = n < BANK_SIZE ? `+1 in ${clock((1 - (t % 1)) * REGEN_MS)}` : 'full';
-  // the ring fills toward the next pixel
   $<SVGCircleElement>('#cdring .fg').style.strokeDashoffset = String(113.1 * (n < BANK_SIZE ? 1 - (t % 1) : 0));
   placeBtn.classList.toggle('cooling', n < BANK_SIZE);
+  const clear = $<HTMLButtonElement>('#clear');
+  clear.disabled = !drafts.size;
+  $('#clear span').textContent = drafts.size ? `Clear ${drafts.size}` : 'Clear';
 }
 setInterval(paintPlace, 250);
+placeBtn.addEventListener('click', () => !placeBtn.disabled && placeDrafts());
 
-placeBtn.addEventListener('click', () => selected >= 0 && !placeBtn.disabled && place(selected));
-
-async function place(i: number) {
-  const prev = board.colours[i], prevId = ids[i];
-  const c = colour;
-  board.set(i, c);
-  bank = { tokens: tokensNow() - 1, at: Date.now() };
+async function placeDrafts() {
+  const batch = [...drafts].slice(0, Math.min(Math.floor(tokensNow()), BANK_SIZE));
+  if (!batch.length) return;
+  const before = batch.map(([i]) => ({ colour: board.colours[i], id: ids[i] }));
+  for (const [i, c] of batch) drafts.delete(i), board.set(i, c);
+  bank = { tokens: tokensNow() - batch.length, at: Date.now() };
   inflight++;
-  navigator.vibrate?.(10);
-  chime(c);
+  navigator.vibrate?.(12);
+  chime(batch[0][1]);
   paintPlace();
   let res;
   try {
-    res = await postJSON('/api/place', { d: deviceId, x: i % SIZE, y: (i / SIZE) | 0, colour: c });
+    res = await postJSON('/api/place', { d: deviceId, pixels: batch.map(([i, c]) => [i % W, (i / W) | 0, c]) });
   } catch {
     res = { status: 0, body: {} };
   }
   inflight--;
   const b = res.body;
+  const placed: WireEvent[] = res.status === 200 ? b.evs : [];
   // resync with the server's count once nothing else is on its way
   const synced = typeof b.tokens === 'number' && !inflight;
   if (synced) bank = { tokens: b.tokens, at: Date.now() };
+  else bank = { tokens: tokensNow() + batch.length - placed.length, at: Date.now() };
+  for (const e of placed) applyEvent(e, false), myPixels.add(e[2] * W + e[1]);
+  // Anything the server didn't take goes back to how it was, and back into the drafts.
+  batch.slice(placed.length).forEach(([i, c], k) => {
+    const was = before[placed.length + k];
+    if (ids[i] === was.id) board.set(i, was.colour, false);
+    if (!drafts.has(i)) drafts.set(i, c);
+  });
+  if (b.error === 'rate') blockedUntil = Date.now() + (b.retryMs ?? 0);
   if (res.status === 200) {
     st.mine = b.mine;
-    myPixels.add(i);
     setStats(b);
-    applyEvent(b.ev, false);
-    const n = Math.floor(tokensNow());
-    toast(`+1 · ${n} pixel${n === 1 ? '' : 's'} left`, true);
-    paintPlace();
-    return;
+    const left = Math.floor(tokensNow());
+    const kept = batch.length - placed.length;
+    toast(kept ? `+${placed.length} · ${kept} kept as drafts` : `+${placed.length} · ${left} pixel${left === 1 ? '' : 's'} left`, true);
+  } else {
+    toast(
+      b.error === 'empty' ? 'Out of pixels. One comes back every 30 seconds.'
+      : b.error === 'rate' ? 'Lots of pixels from your network right now. Your drafts are kept.'
+      : b.error === 'daily' ? "Your network hit today's limit. It resets at 00:00 UTC."
+      : "Couldn't reach the canvas. Your drafts are kept.",
+    );
   }
-  // rejected: roll the optimistic pixel back unless someone has painted it since
-  if (ids[i] === prevId) board.set(i, prev, false);
-  if (!synced) bank = { tokens: tokensNow() + 1, at: Date.now() }; // give back the pixel we spent optimistically
-  if (b.error === 'rate') blockedUntil = Date.now() + (b.retryMs ?? 0);
   paintPlace();
-  toast(
-    b.error === 'empty' ? 'Out of pixels. One comes back every 30 seconds.'
-    : b.error === 'rate' ? 'Lots of pixels from your network right now. Try again in a moment.'
-    : b.error === 'daily' ? "Your network hit today's limit. It resets at 00:00 UTC."
-    : "Couldn't reach the canvas. Check your connection.",
-  );
 }
 
 /** Applies a server event in id order; our own echo is already on screen, so it doesn't flash again. */
 function applyEvent(e: WireEvent, flash = true) {
   const [id, x, y, c, w] = e;
-  const i = y * SIZE + x;
+  const i = y * W + x;
   st.lastId = Math.max(st.lastId, id);
   if (id <= ids[i]) return;
   ids[i] = id;
   if (w === who) myPixels.add(i);
   else myPixels.delete(i);
   if (board.colours[i] !== c) board.set(i, c, flash && w !== who);
+  if (i === lastTapped) showInfo(i);
+}
+
+// ---------- pixel info ----------
+const ago = (ts: number) => {
+  const s = Math.max(1, Math.round((Date.now() - ts) / 1000));
+  return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)} min ago` : s < 86400 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} days ago`;
+};
+let infoSeq = 0;
+async function showInfo(i: number) {
+  lastTapped = i;
+  const x = i % W, y = (i / W) | 0, seq = ++infoSeq;
+  const el = $('#info');
+  el.textContent = `${x}, ${y}`;
+  try {
+    const r = await getJSON<{ times: number; ts: number | null }>(`/api/pixel?x=${x}&y=${y}`);
+    if (seq !== infoSeq) return;
+    el.textContent = r.times
+      ? `${x}, ${y} · painted ${r.times}× · last ${ago(r.ts!)}${myPixels.has(i) ? ' · yours' : ''}`
+      : `${x}, ${y} · never painted`;
+  } catch { /* coordinates alone are fine */ }
 }
 
 // ---------- live data ----------
@@ -238,20 +336,27 @@ async function hello() {
   } catch { /* retried in 15s */ }
 }
 
-// ---------- overlay: selection reticle with colour preview, "show mine" pulses ----------
+// ---------- overlay: drafts, last tapped pixel, "show mine" pulses ----------
 board.overlay = (g, now) => {
   const d = board.dpr;
   let more = false;
-  if (selected >= 0) {
-    const [x, y, w] = board.rectOf(selected);
-    const r = Math.max(w, 6 * d);
-    const ox = x + w / 2 - r / 2, oy = y + w / 2 - r / 2;
-    if (!placeBtn.disabled) {
-      g.globalAlpha = 0.75;
-      g.fillStyle = PALETTE[colour];
-      g.fillRect(ox, oy, r, r);
-      g.globalAlpha = 1;
+  for (const [i, c] of drafts) {
+    const [x, y, w] = board.rectOf(i);
+    const r = Math.max(w, 2 * d);
+    g.fillStyle = PALETTE[c];
+    g.fillRect(x, y, r, r);
+    if (w >= 8 * d) {
+      // drafts get a dashed outline so they read as "not placed yet"
+      g.setLineDash([3 * d, 2 * d]);
+      g.lineWidth = 1.5 * d;
+      g.strokeStyle = 'rgba(14,16,32,0.75)';
+      g.strokeRect(x + 0.75 * d, y + 0.75 * d, w - 1.5 * d, w - 1.5 * d);
+      g.setLineDash([]);
     }
+  }
+  if (lastTapped >= 0 && !drafts.has(lastTapped)) {
+    const [x, y, w] = board.rectOf(lastTapped);
+    const r = Math.max(w, 6 * d), ox = x + w / 2 - r / 2, oy = y + w / 2 - r / 2;
     g.lineWidth = 3 * d;
     g.strokeStyle = '#0E1020';
     g.strokeRect(ox - 2 * d, oy - 2 * d, r + 4 * d, r + 4 * d);
@@ -276,7 +381,7 @@ board.overlay = (g, now) => {
 
 function showMine() {
   if (!myPixels.size) {
-    toast(st.mine ? 'Your pixels have all been painted over. Place another!' : "You haven't placed a pixel yet.");
+    toast(st.mine ? 'Your pixels have all been painted over. Place more!' : "You haven't placed a pixel yet.");
     return;
   }
   highlightUntil = performance.now() + 3000;
@@ -294,18 +399,17 @@ function toast(text: string, mine = false) {
   toastTimer = window.setTimeout(() => t.classList.remove('show'), mine ? 3200 : 2800);
 }
 $('#toast button').addEventListener('click', showMine);
-$('#mine').addEventListener('click', showMine);
 
 function dismissHint() {
   const h = $('#hint');
   if (h.hidden) return;
   h.classList.add('gone');
   setTimeout(() => (h.hidden = true), 400);
-  store.set('pw.hint', '1');
+  store.set('pw.hint', '2');
 }
-if (!store.get('pw.hint')) $('#hint').hidden = false;
+if (store.get('pw.hint') !== '2') $('#hint').hidden = false;
 
-// ---------- palette ----------
+// ---------- palette & tools ----------
 const swatches = PALETTE.map((hex, i) => {
   const b = document.createElement('button');
   b.className = 'swatch';
@@ -325,6 +429,23 @@ function pick(c: number) {
   placeBtn.style.setProperty('--c', PALETTE[c]);
   board.kick();
 }
+function setMode(m: 'move' | 'draw') {
+  mode = m;
+  store.set('pw.mode', m);
+  $('#mode-move').setAttribute('aria-pressed', String(m === 'move'));
+  $('#mode-draw').setAttribute('aria-pressed', String(m === 'draw'));
+  paintPlace();
+}
+function setPicking(on: boolean) {
+  picking = on;
+  $('#picker').setAttribute('aria-pressed', String(on));
+  if (on) toast('Tap any pixel to copy its colour');
+}
+$('#mode-move').addEventListener('click', () => setMode('move'));
+$('#mode-draw').addEventListener('click', () => setMode('draw'));
+$('#picker').addEventListener('click', () => setPicking(!picking));
+$('#clear').addEventListener('click', clearDrafts);
+$('#mine').addEventListener('click', showMine);
 
 // ---------- top bar ----------
 const soundBtn = $('#sound');
@@ -338,7 +459,13 @@ soundBtn.addEventListener('click', () => {
   if (soundOn()) chime(colour);
 });
 $('#timelapse-btn').addEventListener('click', () => openTimelapse(false));
-$('#about-btn').addEventListener('click', () => openPanel($('#about')));
+$('#about-btn').addEventListener('click', () => {
+  $('#about-stats').textContent =
+    `${fmt(st.pixels)} pixels placed by ${fmt(st.people)} ${st.people === 1 ? 'person' : 'people'}; ${fmt(Math.max(0, st.online))} online now. ` +
+    `You've placed ${fmt(st.mine)}, and ${fmt(myPixels.size)} are still showing.` +
+    (st.since ? ` The canvas started on ${new Date(st.since).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}.` : '');
+  openPanel($('#about'));
+});
 $('#share-btn').addEventListener('click', async () => {
   const b = $<HTMLButtonElement>('#share-btn');
   b.disabled = true;
@@ -350,9 +477,17 @@ $('#share-btn').addEventListener('click', async () => {
   b.disabled = false;
 });
 document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => closeTop()));
+addEventListener('keydown', (e) => {
+  if (e.target instanceof HTMLInputElement) return;
+  if (e.key === 'Enter' && !placeBtn.disabled) placeDrafts();
+  if (e.key === 'd') setMode(mode === 'draw' ? 'move' : 'draw');
+});
 
 // ---------- boot ----------
+// Embarko pins its badge to the bottom-left of hosted apps; leave room so it never covers Place.
+document.documentElement.classList.toggle('hosted', location.hostname.endsWith('.embarko.app') || new URLSearchParams(location.search).has('hosted'));
 pick(colour);
+setMode(mode);
 paintSound();
 setStats({});
 paintPlace();

@@ -1,7 +1,8 @@
 // Board size, palette and validation shared by server and client.
 
-export const SIZE = 1000; // the canvas is SIZE x SIZE pixels
-export const BANK_SIZE = 64; // pixels a new device starts with, and the most it can hold
+export const W = 1200; // canvas width in pixels
+export const H = 1800; // canvas height: portrait, so it fills a phone screen
+export const BANK_SIZE = 64; // pixels a new device starts with, the most it can hold, and the most in one batch
 export const REGEN_MS = 30_000; // one pixel comes back every 30 seconds
 export const EMPTY = 255; // colour index of an untouched pixel (drawn as the paper colour)
 export const PAPER = '#F4F1EA';
@@ -21,7 +22,7 @@ export const PALETTE_NAMES = [
 
 const int = (v: unknown, lo: number, hi: number) => Number.isInteger(v) && (v as number) >= lo && (v as number) <= hi;
 export const validPixel = (x: unknown, y: unknown, colour: unknown) =>
-  int(x, 0, SIZE - 1) && int(y, 0, SIZE - 1) && int(colour, 0, PALETTE.length - 1);
+  int(x, 0, W - 1) && int(y, 0, H - 1) && int(colour, 0, PALETTE.length - 1);
 
 /** Calendar day in UTC (YYYY-MM-DD); daily placement caps reset on it. */
 export const utcDay = (ts: number) => new Date(ts).toISOString().slice(0, 10);

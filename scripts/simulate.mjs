@@ -25,16 +25,16 @@ const HOST = '127.0.0.1';
 const BASE = `http://${HOST}:${PORT}`;
 if (new URL(BASE).hostname !== '127.0.0.1') throw new Error('simulator only runs against its own local server');
 
-const SIZE = 1000, COLOURS = 16; // must mirror shared/pixels.ts
+const W = 1200, H = 1800, COLOURS = 16; // must mirror shared/pixels.ts
 const rnd = (n) => Math.floor(Math.random() * n);
 // Each fake person "draws": a short random walk in one colour, so the canvas looks used rather than noisy.
 const walker = () => {
-  let x = rnd(SIZE), y = rnd(SIZE), colour = rnd(COLOURS);
+  let x = rnd(W), y = rnd(H), colour = rnd(COLOURS);
   return () => {
-    if (Math.random() < 0.04) (x = rnd(SIZE)), (y = rnd(SIZE)), (colour = rnd(COLOURS));
-    x = (x + rnd(3) - 1 + SIZE) % SIZE;
-    y = (y + rnd(3) - 1 + SIZE) % SIZE;
-    return { x, y, colour };
+    if (Math.random() < 0.04) (x = rnd(W)), (y = rnd(H)), (colour = rnd(COLOURS));
+    x = (x + rnd(3) - 1 + W) % W;
+    y = (y + rnd(3) - 1 + H) % H;
+    return [x, y, colour];
   };
 };
 
@@ -107,9 +107,11 @@ async function client(i, signal) {
   signal.addEventListener('abort', () => clearInterval(hb));
   await new Promise((r) => setTimeout(r, Math.random() * 4000));
   while (!signal.aborted) {
-    const r = await post('/api/place', { d, ...next() }).catch(() => null);
-    r?.ok ? stats.placed++ : stats.rejected++;
-    await new Promise((res) => setTimeout(res, 4100 + Math.random() * 2500));
+    // draft a short stroke, then place it in one batch
+    const r = await post('/api/place', { d, pixels: Array.from({ length: 3 + rnd(6) }, next) }).catch(() => null);
+    const body = r?.ok ? await r.json() : null;
+    body ? (stats.placed += body.evs.length) : stats.rejected++;
+    await new Promise((res) => setTimeout(res, 6000 + Math.random() * 4000));
   }
 }
 
@@ -121,7 +123,7 @@ if (SEED) {
   const batch = 200;
   const walkers = Array.from({ length: 60 }, walker);
   for (let n = 0; n < SEED; n += batch)
-    await Promise.all(Array.from({ length: Math.min(batch, SEED - n) }, (_, k) => post('/api/place', { d: randomUUID(), ...walkers[(n + k) % walkers.length]() })));
+    await Promise.all(Array.from({ length: Math.min(batch, SEED - n) }, (_, k) => post('/api/place', { d: randomUUID(), pixels: [walkers[(n + k) % walkers.length]()] })));
   console.log(`seeded ${SEED} events in ${Date.now() - t0}ms`);
 }
 console.log(`simulating ${CLIENTS} clients (${TRANSPORT}) for ${SECONDS}s against ${BASE}`);

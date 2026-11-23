@@ -1,5 +1,5 @@
 import { crc32, deflateSync } from 'node:zlib';
-import { EMPTY, PALETTE, PAPER, SIZE } from '../shared/pixels.ts';
+import { EMPTY, H as BH, PALETTE, PAPER, W as BW } from '../shared/pixels.ts';
 
 const hex = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
 const BG = hex('#0E1020');
@@ -31,14 +31,15 @@ export function encodePng(w: number, h: number, rgb: Uint8Array) {
 
 /** Link preview: the live canvas on the app's dark background, 1200 x 630. */
 export function ogImage(board: Uint8Array) {
-  const W = 1200, H = 630, side = 570, x0 = (W - side) / 2, y0 = (H - side) / 2;
+  const W = 1200, H = 630, k = 570 / BH; // fit the portrait canvas to the preview's height
+  const cw = Math.round(BW * k), ch = Math.round(BH * k), x0 = (W - cw) / 2, y0 = (H - ch) / 2;
   const rgb = new Uint8Array(W * H * 3);
   const colourOf = (v: number) => COLOUR[v === EMPTY ? PALETTE.length : v];
   for (let y = 0; y < H; y++)
     for (let x = 0; x < W; x++) {
-      const inside = x >= x0 && x < x0 + side && y >= y0 && y < y0 + side;
-      const bx = Math.floor(((x - x0) * SIZE) / side), by = Math.floor(((y - y0) * SIZE) / side);
-      rgb.set(inside ? colourOf(board[by * SIZE + bx]) : BG, (y * W + x) * 3);
+      const inside = x >= x0 && x < x0 + cw && y >= y0 && y < y0 + ch;
+      const bx = Math.min(BW - 1, Math.floor((x - x0) / k)), by = Math.min(BH - 1, Math.floor((y - y0) / k));
+      rgb.set(inside ? colourOf(board[by * BW + bx]) : BG, (y * W + x) * 3);
     }
   return encodePng(W, H, rgb);
 }
