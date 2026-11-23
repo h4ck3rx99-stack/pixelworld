@@ -47,7 +47,9 @@ export function createApp(opts: Options) {
 
   // ---- the board, kept in memory and rebuilt from the event log on start ----
   let board = new Uint8Array(W * H);
-  let owner: string[] = [];
+  // Who last painted each pixel, as a small number (a plain JS array this size would blow the 256 MB limit).
+  let owner = new Uint32Array(W * H);
+  let whoIds = new Map<string, number>();
   let people = new Set<string>();
   let mine = new Map<string, number>();
   let pixels = 0;
@@ -56,7 +58,8 @@ export function createApp(opts: Options) {
 
   function load() {
     board = new Uint8Array(W * H).fill(EMPTY);
-    owner = new Array(W * H).fill('');
+    owner = new Uint32Array(W * H); // 0 = nobody
+    whoIds = new Map();
     people = new Set();
     mine = new Map();
     pixels = 0;
@@ -67,7 +70,9 @@ export function createApp(opts: Options) {
   function apply(r: Row) {
     const i = r.y * W + r.x;
     board[i] = r.colour;
-    owner[i] = r.who;
+    let wid = whoIds.get(r.who);
+    if (!wid) whoIds.set(r.who, (wid = whoIds.size + 1));
+    owner[i] = wid;
     people.add(r.device);
     mine.set(r.device, (mine.get(r.device) ?? 0) + 1);
     pixels++;
@@ -145,7 +150,8 @@ export function createApp(opts: Options) {
     const d = c.req.query('d') ?? '';
     const me = UUID.test(d) ? whoOf(d) : '';
     const myPixels: number[] = [];
-    if (me) owner.forEach((w, i) => w === me && myPixels.push(i));
+    const wid = me ? whoIds.get(me) : 0;
+    if (wid) owner.forEach((w, i) => w === wid && myPixels.push(i));
     return c.json({
       w: W, h: H, lastId, board: Buffer.from(board).toString('base64'), ...stats(), since: firstTs,
       mine: me ? mine.get(d) ?? 0 : 0, myPixels,
