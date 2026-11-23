@@ -9,6 +9,7 @@ import { streamSSE, type SSEStreamingApi } from 'hono/streaming';
 import { getConnInfo } from '@hono/node-server/conninfo';
 import { EMPTY, SIZE, validPixel, type WireEvent } from '../shared/pixels.ts';
 import { Limiter, type Bank, type LimitConfig } from './limits.ts';
+import { iconImage, ogImage } from './png.ts';
 
 export type Options = { dataDir: string; adminSecret?: string; limits: LimitConfig; now?: () => number };
 
@@ -205,6 +206,18 @@ export function createApp(opts: Options) {
     const ev = (q.log.all() as Pick<Row, 'x' | 'y' | 'colour'>[]).flatMap((r) => [r.x, r.y, r.colour]);
     return c.json({ size: SIZE, since: firstTs, pixels, people: people.size, ev });
   });
+
+  // ---- images rendered by the server, so the deploy has no binary files ----
+  const png = (body: Buffer, maxAge: number) =>
+    new Response(new Uint8Array(body), { headers: { 'content-type': 'image/png', 'cache-control': `public, max-age=${maxAge}` } });
+  let og = { at: 0, body: Buffer.alloc(0) };
+  app.get('/og.png', () => {
+    if (now() - og.at > 300_000) og = { at: now(), body: ogImage(board) }; // the live canvas, re-rendered every 5 min
+    return png(og.body, 300);
+  });
+  const icons = new Map([192, 512].map((n) => [n, iconImage(n)]));
+  app.get('/icon-192.png', () => png(icons.get(192)!, 86400));
+  app.get('/icon-512.png', () => png(icons.get(512)!, 86400));
 
   // ---- admin (Authorization: Bearer $ADMIN_SECRET) ----
   const admin = new Hono();

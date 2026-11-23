@@ -1,5 +1,6 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { inflateSync } from 'node:zlib';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { BANK_SIZE, EMPTY, REGEN_MS, SIZE } from '../shared/pixels.ts';
@@ -76,6 +77,20 @@ describe('server', () => {
     expect((await place(inst.app, { d: D2, x: 0, y: 1, colour: 1 })).status).toBe(429); // restart did not refill it
     t += REGEN_MS;
     expect((await place(inst.app, { d: D2, x: 0, y: 1, colour: 1 })).status).toBe(200);
+  });
+
+  it('renders the link preview and icons as real PNGs', async () => {
+    const app = boot();
+    await place(app, { d: D1, x: 500, y: 500, colour: 5 });
+    for (const [path, w, h] of [['/og.png', 1200, 630], ['/icon-192.png', 192, 192], ['/icon-512.png', 512, 512]] as const) {
+      const r = await app.request(path);
+      expect(r.headers.get('content-type')).toBe('image/png');
+      const b = Buffer.from(await r.arrayBuffer());
+      expect(b.subarray(1, 4).toString()).toBe('PNG');
+      expect([b.readUInt32BE(16), b.readUInt32BE(20)]).toEqual([w, h]);
+      const rows = inflateSync(b.subarray(41, b.length - 12)); // IDAT payload (single chunk)
+      expect(rows.length).toBe((w * 3 + 1) * h);
+    }
   });
 
   it('protects admin endpoints', async () => {
