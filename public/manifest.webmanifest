@@ -1,12 +1,12 @@
 {
-  "name": "RangoliLive",
-  "short_name": "Rangoli",
-  "description": "One shared, live rangoli drawn by everyone. Every piece mirrored 8 ways.",
+  "name": "PixelWorld",
+  "short_name": "PixelWorld",
+  "description": "One shared pixel canvas for the whole world, live.",
   "start_url": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#1a1211",
-  "theme_color": "#1a1211",
+  "background_color": "#0E1020",
+  "theme_color": "#0E1020",
   "icons": [
     { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
     { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" },

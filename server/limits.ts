@@ -1,4 +1,4 @@
-import { istDay } from '../shared/grid.ts';
+import { utcDay } from '../shared/pixels.ts';
 
 export type LimitConfig = { cooldownMs: number; ipPerMin: number; deviceDaily: number; ipDaily: number };
 export type Verdict = { ok: true } | { ok: false; reason: 'cooldown' | 'rate' | 'daily'; retryMs: number };
@@ -19,7 +19,7 @@ export class Limiter {
 
   /** Checks every limit and, if all pass, records the placement. */
   take(device: string, ip: string, now: number): Verdict {
-    const day = istDay(now);
+    const day = utcDay(now);
     if (day !== this.day) (this.day = day), this.daily.clear();
 
     const wait = (this.last.get(device) ?? -Infinity) + this.cfg.cooldownMs - SLACK_MS - now;

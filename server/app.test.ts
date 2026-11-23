@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { EMPTY, SIZE } from '../shared/pixels.ts';
 import { createApp } from './app.ts';
 
 const D1 = '11111111-1111-4111-8111-111111111111';
@@ -11,7 +12,7 @@ let dir = '';
 let inst: ReturnType<typeof createApp> | null = null;
 
 function boot() {
-  dir = mkdtempSync(join(tmpdir(), 'rangoli-'));
+  dir = mkdtempSync(join(tmpdir(), 'pixelworld-'));
   inst = createApp({ dataDir: dir, adminSecret: 's3cret', limits: { cooldownMs: 4000, ipPerMin: 100, deviceDaily: 100, ipDaily: 100 }, now: () => t });
   return inst.app;
 }
@@ -19,62 +20,63 @@ afterEach(() => {
   inst?.close();
   rmSync(dir, { recursive: true, force: true });
 });
-const place = (app: ReturnType<typeof boot>, body: object) =>
+type App = ReturnType<typeof boot>;
+const place = (app: App, body: object) =>
   app.request('/api/place', { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json', 'x-forwarded-for': '1.2.3.4' } });
+const boardOf = (s: { board: string }) => new Uint8Array(Buffer.from(s.board, 'base64'));
 
 describe('server', () => {
   it('places, enforces cooldown, validates, and serves deltas', async () => {
     const app = boot();
-    const ok = await place(app, { d: D1, ring: 3, slot: 1, piece: 2, colour: 4 });
+    const ok = await place(app, { d: D1, x: 3, y: 7, colour: 5 });
     expect(ok.status).toBe(200);
     const body = await ok.json();
     expect(body.mine).toBe(1);
-    expect(body.ev.slice(1, 5)).toEqual([3, 1, 2, 4]);
+    expect(body.ev.slice(1, 4)).toEqual([3, 7, 5]);
 
-    expect((await place(app, { d: D1, ring: 3, slot: 0, piece: 0, colour: 0 })).status).toBe(429);
-    expect((await place(app, { d: D2, ring: 3, slot: 99, piece: 0, colour: 0 })).status).toBe(400);
-    expect((await place(app, { d: 'nope', ring: 3, slot: 0, piece: 0, colour: 0 })).status).toBe(400);
+    expect((await place(app, { d: D1, x: 4, y: 7, colour: 5 })).status).toBe(429);
+    expect((await place(app, { d: D2, x: SIZE, y: 0, colour: 0 })).status).toBe(400);
+    expect((await place(app, { d: 'nope', x: 0, y: 0, colour: 0 })).status).toBe(400);
 
     t += 4000;
-    expect((await place(app, { d: D1, ring: 3, slot: 1, piece: 0, colour: 0 })).status).toBe(200); // replaces the cell
+    expect((await place(app, { d: D1, x: 3, y: 7, colour: 9 })).status).toBe(200); // overwrites the pixel
 
     const state = await (await app.request(`/api/state?d=${D1}`)).json();
-    expect(state.cells.length).toBe(1);
-    expect(state.cells[0][3]).toBe(0);
-    expect(state.pieces).toBe(2);
-    expect(state.people).toBe(1);
-    expect(state.mine).toBe(2);
+    const board = boardOf(state);
+    expect(board.length).toBe(SIZE * SIZE);
+    expect(board[7 * SIZE + 3]).toBe(9);
+    expect(board[0]).toBe(EMPTY);
+    expect(state).toMatchObject({ pixels: 2, people: 1, mine: 2, myPixels: [7 * SIZE + 3] });
 
-    const delta = await (await app.request(`/api/events?since=${body.ev[0]}&day=${state.day}`)).json();
+    const delta = await (await app.request(`/api/events?since=${body.ev[0]}`)).json();
     expect(delta.e.length).toBe(1);
-    expect((await (await app.request(`/api/events?since=0&day=2001-01-01`)).json()).reload).toBe(true);
+    expect((await (await app.request(`/api/events?since=999`)).json()).reload).toBe(true);
+
+    const log = await (await app.request('/api/log')).json();
+    expect(log.ev).toEqual([3, 7, 5, 3, 7, 9]);
   });
 
-  it('rolls over at midnight IST and archives the day', async () => {
+  it('rebuilds the board from the event log after a restart', async () => {
     const app = boot();
-    await place(app, { d: D1, ring: 5, slot: 0, piece: 1, colour: 1 });
-    const day1 = (await (await app.request('/api/state')).json()).day;
-    t = Date.UTC(2026, 10, 23, 18, 30); // 00:00 IST
-    const s = await (await app.request('/api/state')).json();
-    expect(s.day).not.toBe(day1);
-    expect(s.cells.length).toBe(0);
-    const days = await (await app.request('/api/days')).json();
-    expect(days.past[0]).toMatchObject({ day: day1, pieces: 1, people: 1 });
-    const snap = await (await app.request(`/api/day/${day1}/snapshot`)).json();
-    expect(snap.cells.length).toBe(1);
-    const log = await (await app.request(`/api/day/${day1}/log`)).json();
-    expect(log.ev).toEqual([5, 0, 1, 1]);
+    await place(app, { d: D1, x: 1, y: 2, colour: 3 });
+    inst!.close();
+    inst = createApp({ dataDir: dir, limits: { cooldownMs: 4000, ipPerMin: 100, deviceDaily: 100, ipDaily: 100 }, now: () => t });
+    const s = await (await inst.app.request('/api/state')).json();
+    expect(boardOf(s)[2 * SIZE + 1]).toBe(3);
+    expect(s.pixels).toBe(1);
   });
 
   it('protects admin endpoints', async () => {
     const app = boot();
-    await place(app, { d: D1, ring: 5, slot: 0, piece: 1, colour: 1 });
+    await place(app, { d: D1, x: 5, y: 5, colour: 1 });
     expect((await app.request('/api/admin/reset', { method: 'POST' })).status).toBe(404);
     expect((await app.request('/api/admin/reset', { method: 'POST', headers: { authorization: 'Bearer wrong!' } })).status).toBe(404);
     const auth = { authorization: 'Bearer s3cret', 'content-type': 'application/json' };
     const purge = await app.request('/api/admin/purge', { method: 'POST', headers: auth, body: JSON.stringify({ device: D1 }) });
     expect((await purge.json()).deleted).toBe(1);
-    expect((await (await app.request('/api/state')).json()).pieces).toBe(0);
+    const s = await (await app.request('/api/state')).json();
+    expect(s.pixels).toBe(0);
+    expect(boardOf(s)[5 * SIZE + 5]).toBe(EMPTY);
     expect((await app.request('/api/admin/export', { headers: auth })).status).toBe(200);
   });
 });

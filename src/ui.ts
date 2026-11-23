@@ -32,8 +32,3 @@ export function closeTop() {
 addEventListener('popstate', pop);
 addEventListener('keydown', (e) => e.key === 'Escape' && closeTop());
 
-export function prettyDay(day: string, long = false) {
-  return new Date(day + 'T12:00:00Z').toLocaleDateString('en-IN', long
-    ? { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }
-    : { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
-}

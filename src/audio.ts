@@ -1,13 +1,13 @@
 // Tiny synthesised sounds, so there are no audio files to load. Muted by default.
 let ac: AudioContext | null = null;
 let on = (() => {
-  try { return localStorage.getItem('rl.sound') === '1'; } catch { return false; }
+  try { return localStorage.getItem('pw.sound') === '1'; } catch { return false; }
 })();
 
 export const soundOn = () => on;
 export function setSound(v: boolean) {
   on = v;
-  try { localStorage.setItem('rl.sound', v ? '1' : '0'); } catch { /* private mode */ }
+  try { localStorage.setItem('pw.sound', v ? '1' : '0'); } catch { /* private mode */ }
   if (v) ctx();
 }
 /** Call inside a user gesture so a later bell is allowed to play. */
@@ -32,11 +32,11 @@ function tone(freq: number, start: number, dur: number, gain: number) {
   o.stop(start + dur + 0.05);
 }
 
-/** Soft two-note chime when you place a piece. */
+/** Soft two-note chime when you place a pixel. */
 export function chime(colour: number) {
   if (!on) return;
   const t = ctx().currentTime;
-  const base = [880, 988, 1047, 1175, 1319, 1397, 1568, 1760][colour] ?? 1047;
+  const base = [880, 988, 1047, 1175, 1319, 1397, 1568, 1760][colour % 8];
   tone(base, t, 0.5, 0.05);
   tone(base * 1.5, t + 0.06, 0.6, 0.03);
 }

@@ -30,10 +30,11 @@ describe('Limiter', () => {
     expect(l.take('d9', 'ip', T + 60_000).ok).toBe(true);
   });
 
-  it('caps a device per IST day and resets at midnight IST', () => {
+  it('caps a device per UTC day and resets at midnight UTC', () => {
     const l = new Limiter(cfg);
     for (let i = 0; i < 3; i++) expect(l.take('a', 'ip' + i, T + i * 5000).ok).toBe(true);
     expect(l.take('a', 'ipx', T + 20_000)).toMatchObject({ ok: false, reason: 'daily' });
-    expect(l.take('a', 'ipx', Date.UTC(2026, 10, 23, 18, 30)).ok).toBe(true);
+    expect(l.take('a', 'ipx', Date.UTC(2026, 10, 23, 23, 59)).ok).toBe(false);
+    expect(l.take('a', 'ipx', Date.UTC(2026, 10, 24, 0, 0)).ok).toBe(true);
   });
 });

@@ -3,7 +3,7 @@
 //
 //   node scripts/simulate.mjs [--clients 50] [--transport mixed|sse|poll] [--seconds 60] [--seed 0] [--keep]
 //
-// --seed N   pre-fills today's board with N events (e.g. 6000) to test rendering load
+// --seed N   pre-fills the canvas with N pixels (e.g. 6000) to test load and the timelapse
 // --keep     leaves the server running afterwards so you can open it in a browser (run `npm run build` first)
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -25,16 +25,20 @@ const HOST = '127.0.0.1';
 const BASE = `http://${HOST}:${PORT}`;
 if (new URL(BASE).hostname !== '127.0.0.1') throw new Error('simulator only runs against its own local server');
 
-// Must mirror shared/grid.ts
-const R0 = 0.12, RW = (1 - R0) / 13;
-const SLOTS = Array.from({ length: 14 }, (_, i) => (i === 0 ? 1 : Math.max(1, Math.round(((R0 + (i - 0.5) * RW) * Math.PI) / 4 / (RW * 0.85)))));
+const SIZE = 160, COLOURS = 16; // must mirror shared/pixels.ts
 const rnd = (n) => Math.floor(Math.random() * n);
-const randomCell = () => {
-  const ring = Math.random() < 0.02 ? 0 : 1 + rnd(13);
-  return { ring, slot: rnd(SLOTS[ring]), piece: rnd(8), colour: rnd(8) };
+// Each fake person "draws": a short random walk in one colour, so the canvas looks used rather than noisy.
+const walker = () => {
+  let x = rnd(SIZE), y = rnd(SIZE), colour = rnd(COLOURS);
+  return () => {
+    if (Math.random() < 0.04) (x = rnd(SIZE)), (y = rnd(SIZE)), (colour = rnd(COLOURS));
+    x = (x + rnd(3) - 1 + SIZE) % SIZE;
+    y = (y + rnd(3) - 1 + SIZE) % SIZE;
+    return { x, y, colour };
+  };
 };
 
-const dataDir = mkdtempSync(join(tmpdir(), 'rangoli-sim-'));
+const dataDir = mkdtempSync(join(tmpdir(), 'pixelworld-sim-'));
 const server = spawn(process.execPath, ['server/index.ts'], {
   env: { ...process.env, PORT: String(PORT), DATA_DIR: dataDir, IP_PER_MIN: '1000000', DEVICE_DAILY: '1000000', IP_DAILY: '1000000', ADMIN_SECRET: '' },
   stdio: ['ignore', 'pipe', 'inherit'],
@@ -59,11 +63,11 @@ const stats = { placed: 0, rejected: 0, deliveries: 0, lat: [], errors: 0 };
 const post = (path, body) => fetch(BASE + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 const take = (events) => {
   const now = Date.now();
-  for (const e of events) { stats.lat.push(now - e[6]); stats.deliveries++; if (now - e[6] > 3000) stats.old = (stats.old ?? 0) + 1; }
+  for (const e of events) { stats.lat.push(now - e[5]); stats.deliveries++; if (now - e[5] > 3000) stats.old = (stats.old ?? 0) + 1; }
 };
 
 async function sseClient(state, signal) {
-  const res = await fetch(`${BASE}/api/stream?since=${state.lastId}&day=${state.day}`, { signal });
+  const res = await fetch(`${BASE}/api/stream?since=${state.lastId}`, { signal });
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   let buf = '';
@@ -84,7 +88,7 @@ async function sseClient(state, signal) {
 async function pollClient(state, signal) {
   while (!signal.aborted) {
     try {
-      const m = await (await fetch(`${BASE}/api/events?since=${state.lastId}&day=${state.day}`, { signal })).json();
+      const m = await (await fetch(`${BASE}/api/events?since=${state.lastId}`, { signal })).json();
       if (m.e) take(m.e), (state.lastId = m.lastId);
     } catch { if (!signal.aborted) stats.errors++; }
     await new Promise((r) => setTimeout(r, 1000));
@@ -94,7 +98,8 @@ async function pollClient(state, signal) {
 async function client(i, signal) {
   const d = randomUUID();
   const s = await (await fetch(`${BASE}/api/state?d=${d}`)).json();
-  const state = { day: s.day, lastId: s.lastId };
+  const state = { lastId: s.lastId };
+  const next = walker();
   const mode = TRANSPORT === 'mixed' ? (i % 2 ? 'sse' : 'poll') : TRANSPORT;
   (mode === 'sse' ? sseClient : pollClient)(state, signal).catch(() => !signal.aborted && stats.errors++);
   post('/api/hello', { d });
@@ -102,7 +107,7 @@ async function client(i, signal) {
   signal.addEventListener('abort', () => clearInterval(hb));
   await new Promise((r) => setTimeout(r, Math.random() * 4000));
   while (!signal.aborted) {
-    const r = await post('/api/place', { d, ...randomCell() }).catch(() => null);
+    const r = await post('/api/place', { d, ...next() }).catch(() => null);
     r?.ok ? stats.placed++ : stats.rejected++;
     await new Promise((res) => setTimeout(res, 4100 + Math.random() * 2500));
   }
@@ -114,8 +119,9 @@ await waitUp();
 if (SEED) {
   const t0 = Date.now();
   const batch = 200;
+  const walkers = Array.from({ length: 60 }, walker);
   for (let n = 0; n < SEED; n += batch)
-    await Promise.all(Array.from({ length: Math.min(batch, SEED - n) }, () => post('/api/place', { d: randomUUID(), ...randomCell() })));
+    await Promise.all(Array.from({ length: Math.min(batch, SEED - n) }, (_, k) => post('/api/place', { d: randomUUID(), ...walkers[(n + k) % walkers.length]() })));
   console.log(`seeded ${SEED} events in ${Date.now() - t0}ms`);
 }
 console.log(`simulating ${CLIENTS} clients (${TRANSPORT}) for ${SECONDS}s against ${BASE}`);

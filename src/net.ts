@@ -1,10 +1,10 @@
-import type { WireEvent } from '../shared/grid.ts';
+import type { WireEvent } from '../shared/pixels.ts';
 
-export type Stats = { pieces: number; people: number; online: number };
-export type State = Stats & { day: string; dayNo: number; lastId: number; cells: WireEvent[]; mine: number; cooldownMs: number; resetAt: number };
+export type Stats = { pixels: number; people: number; online: number };
+export type State = Stats & { size: number; lastId: number; board: string; since: number; mine: number; myPixels: number[]; cooldownMs: number };
 type Msg = Partial<Stats> & { e?: WireEvent[]; lastId?: number; reload?: boolean };
 
-const KEY = 'rl.device';
+const KEY = 'pw.device';
 export const deviceId: string = (() => {
   try {
     let id = localStorage.getItem(KEY);
@@ -45,7 +45,7 @@ export class Live {
   private errors: number[] = [];
 
   constructor(
-    private get: () => { day: string; lastId: number },
+    private get: () => { lastId: number },
     private onMsg: (m: Msg) => void,
     private onMode: (mode: string) => void,
   ) {}
@@ -62,8 +62,7 @@ export class Live {
   }
 
   private sse() {
-    const { day, lastId } = this.get();
-    const es = (this.es = new EventSource(`/api/stream?since=${lastId}&day=${day}`));
+    const es = (this.es = new EventSource(`/api/stream?since=${this.get().lastId}`));
     const giveUp = setTimeout(() => this.mode === 'connecting' && this.fallback(), 4000);
     es.addEventListener('hello', () => {
       clearTimeout(giveUp);
@@ -89,8 +88,7 @@ export class Live {
     const tick = async () => {
       if (!document.hidden) {
         try {
-          const { day, lastId } = this.get();
-          this.onMsg(await getJSON<Msg>(`/api/events?since=${lastId}&day=${day}`));
+          this.onMsg(await getJSON<Msg>(`/api/events?since=${this.get().lastId}`));
         } catch {
           /* offline for a moment: next tick retries */
         }

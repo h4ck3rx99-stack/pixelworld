@@ -1,75 +1,73 @@
-import '@fontsource-variable/fraunces';
 import '@fontsource-variable/inter';
 import './style.css';
-import { cellAt, COLOUR_NAMES, COLOURS, PIECE_NAMES, PIECES, type WireEvent } from '../shared/grid.ts';
+import { PALETTE, PALETTE_NAMES, SIZE, type WireEvent } from '../shared/pixels.ts';
 import { chime, setSound, soundOn } from './audio.ts';
+import { Board } from './board.ts';
 import { deviceId, getJSON, Live, myWho, postJSON, type State } from './net.ts';
-import { cellFromWire, copyCentres, keyOf, SPR, spr, type Cell } from './render.ts';
-import { Stage } from './stage.ts';
-import { openGallery, openTimelapse } from './gallery.ts';
 import { shareCard } from './share.ts';
-import { closeTop, openPanel, $, fmt, store } from './ui.ts';
+import { openTimelapse } from './timelapse.ts';
+import { $, closeTop, fmt, openPanel, store } from './ui.ts';
 
 const COOLDOWN = 4000;
-const stage = new Stage($<HTMLCanvasElement>('#board'));
-const st = { day: '', dayNo: 1, lastId: 0, pieces: 0, people: 0, online: -1, mine: 0 };
+const board = new Board($<HTMLCanvasElement>('#board'));
+const st = { lastId: 0, pixels: 0, people: 0, online: -1, mine: 0, since: 0 };
+const ids = new Int32Array(SIZE * SIZE); // id of the last event applied to each pixel
+const myPixels = new Set<number>();
 let who = '';
 let cooldownUntil = 0;
-let tapRing: { x: number; y: number; until: number } | null = null;
+let selected = -1;
 let highlightUntil = 0;
-const pending = new Map<number, { local: Cell; prev?: Cell }>();
-const sel = (() => {
-  const [p, c] = (store.get('rl.sel') ?? '1,0').split(',').map(Number);
-  return { piece: p >= 0 && p < PIECES.length ? p : 1, colour: c >= 0 && c < COLOURS.length ? c : 0 };
+let colour = (() => {
+  const c = Number(store.get('pw.colour'));
+  return Number.isInteger(c) && c >= 0 && c < PALETTE.length ? c : 5;
 })();
 
 // ---------- layout & view (pinch-zoom / pan) ----------
 let zoom = 1, panX = 0, panY = 0, base = { cx: 0, cy: 0, s: 1 };
+const maxZoom = () => Math.max(1, 44 / base.s); // up to ~44 css px per pixel
 function layout() {
   const w = innerWidth, h = innerHeight;
   const top = $('#top').getBoundingClientRect().bottom;
   const bottom = $('#sheet').getBoundingClientRect().top;
   document.documentElement.style.setProperty('--sheet-h', `${h - bottom}px`);
   const avail = Math.max(120, bottom - top);
-  base = { cx: w / 2, cy: top + avail / 2, s: Math.max(60, Math.min(w - 20, avail - 12) / 2 / 1.06) };
-  stage.resize(w, h, view());
+  base = { cx: w / 2, cy: top + avail / 2, s: Math.max(0.5, Math.min(w - 16, avail - 16) / SIZE) };
+  zoom = Math.min(zoom, maxZoom());
+  board.resize(w, h, view());
 }
 const view = () => ({ cx: base.cx + panX, cy: base.cy + panY, s: base.s * zoom });
 function setZoom(z: number, ax: number, ay: number) {
   const v = view();
   const mx = (ax - v.cx) / v.s, my = (ay - v.cy) / v.s;
-  zoom = Math.min(6, Math.max(1, z));
+  zoom = Math.min(maxZoom(), Math.max(1, z));
   panX = ax - base.cx - mx * base.s * zoom;
   panY = ay - base.cy - my * base.s * zoom;
   clampPan();
 }
 function clampPan() {
-  const lim = base.s * (zoom - 1) * 1.05;
+  const lim = (base.s * SIZE * (zoom - 1)) / 2;
   panX = Math.max(-lim, Math.min(lim, panX));
   panY = Math.max(-lim, Math.min(lim, panY));
-  stage.setView(view());
+  board.setView(view());
 }
-function resetView() {
-  const z0 = zoom, x0 = panX, y0 = panY, t0 = performance.now();
+function animateZoom(z1: number, ax: number, ay: number) {
+  const z0 = zoom, t0 = performance.now();
   const step = (t: number) => {
     const k = Math.min(1, (t - t0) / 260), e = 1 - Math.pow(1 - k, 3);
-    zoom = z0 + (1 - z0) * e;
-    panX = x0 * (1 - e);
-    panY = y0 * (1 - e);
-    stage.setView(view());
+    setZoom(z0 + (z1 - z0) * e, ax, ay);
     if (k < 1) requestAnimationFrame(step);
   };
   requestAnimationFrame(step);
 }
 
-const pts = new Map<number, { x: number; y: number; x0: number; y0: number; t0: number }>();
+const pts = new Map<number, { x: number; y: number; x0: number; y0: number }>();
 let pinch: { d: number; z: number } | null = null;
 let moved = false;
 let lastTap = { t: 0, x: 0, y: 0 };
-const cv = stage.cv;
+const cv = board.cv;
 cv.addEventListener('pointerdown', (e) => {
   cv.setPointerCapture(e.pointerId);
-  pts.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t0: e.timeStamp });
+  pts.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY });
   if (pts.size === 1) moved = false;
   if (pts.size === 2) {
     const [a, b] = [...pts.values()];
@@ -85,10 +83,9 @@ cv.addEventListener('pointermove', (e) => {
   p.y = e.clientY;
   if (pinch && pts.size === 2) {
     const [a, b] = [...pts.values()];
-    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
     panX += dx / 2;
     panY += dy / 2;
-    setZoom((pinch.z * Math.hypot(a.x - b.x, a.y - b.y)) / pinch.d, mx, my);
+    setZoom((pinch.z * Math.hypot(a.x - b.x, a.y - b.y)) / pinch.d, (a.x + b.x) / 2, (a.y + b.y) / 2);
   } else if (pts.size === 1 && (moved || Math.hypot(p.x - p.x0, p.y - p.y0) > 8)) {
     moved = true;
     if (zoom > 1) (panX += dx), (panY += dy), clampPan();
@@ -101,8 +98,9 @@ const up = (e: PointerEvent) => {
   if (!p || moved || e.type === 'pointercancel' || pts.size) return;
   const dbl = e.timeStamp - lastTap.t < 320 && Math.hypot(p.x - lastTap.x, p.y - lastTap.y) < 40;
   lastTap = { t: e.timeStamp, x: p.x, y: p.y };
-  if (dbl && zoom > 1) return resetView();
-  tap(p.x, p.y);
+  dismissHint();
+  if (dbl) return animateZoom(zoom > 1.5 ? 1 : Math.min(maxZoom(), 8), p.x, p.y); // double-tap: dive in / back out
+  select(board.pixelAt(p.x, p.y));
 };
 cv.addEventListener('pointerup', up);
 cv.addEventListener('pointercancel', up);
@@ -111,100 +109,103 @@ cv.addEventListener('wheel', (e) => {
   setZoom(zoom * Math.exp(-e.deltaY * 0.0015), e.clientX, e.clientY);
 }, { passive: false });
 
-// ---------- placing ----------
-function tap(x: number, y: number) {
-  dismissHint();
-  const v = view();
-  const c = cellAt((x - v.cx) / v.s, (y - v.cy) / v.s);
-  if (!c) return;
-  const left = cooldownUntil - Date.now();
-  if (left > 0) {
-    navigator.vibrate?.([6, 50, 6]);
-    $('#cd').classList.remove('shake');
-    void $('#cd').offsetWidth;
-    $('#cd').classList.add('shake');
-    return;
-  }
-  place(c.ring, c.slot, x, y);
+// ---------- selecting & placing ----------
+const placeBtn = $<HTMLButtonElement>('#place');
+function select(i: number) {
+  selected = i;
+  paintPlace();
+  board.kick();
 }
 
-async function place(ring: number, slot: number, x: number, y: number) {
-  const key = ring * 64 + slot;
-  const prev = stage.cells.get(key);
-  const local: Cell = { id: (prev?.id ?? 0) + 0.5, ring, slot, piece: sel.piece, colour: sel.colour, who };
-  pending.set(key, { local, prev });
-  stage.put(local, {});
+function paintPlace() {
+  const left = Math.max(0, cooldownUntil - Date.now());
+  placeBtn.disabled = selected < 0 || left > 0;
+  $('#place-label').textContent = left
+    ? `Next pixel in ${(left / 1000).toFixed(1)}s`
+    : selected < 0 ? 'Tap a pixel first' : 'Place pixel';
+  $('#place-xy').textContent = selected < 0 ? '' : `${selected % SIZE}, ${(selected / SIZE) | 0}`;
+  $<SVGCircleElement>('#cdring .fg').style.strokeDashoffset = String(113.1 * (left / COOLDOWN));
+  placeBtn.classList.toggle('cooling', left > 0);
+}
+
+let cdRaf = 0;
+function tickCooldown() {
+  cancelAnimationFrame(cdRaf);
+  const step = () => {
+    paintPlace();
+    if (cooldownUntil > Date.now()) cdRaf = requestAnimationFrame(step);
+  };
+  step();
+}
+
+placeBtn.addEventListener('click', () => selected >= 0 && cooldownUntil <= Date.now() && place(selected));
+
+async function place(i: number) {
+  const prev = board.colours[i], prevId = ids[i];
+  const c = colour;
+  board.set(i, c);
   cooldownUntil = Date.now() + COOLDOWN;
-  tapRing = { x, y, until: performance.now() + COOLDOWN };
   navigator.vibrate?.(10);
-  chime(sel.colour);
+  chime(c);
   tickCooldown();
   let res;
   try {
-    res = await postJSON('/api/place', { d: deviceId, ring, slot, piece: sel.piece, colour: sel.colour });
+    res = await postJSON('/api/place', { d: deviceId, x: i % SIZE, y: (i / SIZE) | 0, colour: c });
   } catch {
     res = { status: 0, body: {} };
   }
   if (res.status === 200) {
     st.mine = res.body.mine;
+    myPixels.add(i);
     setStats(res.body);
     applyEvent(res.body.ev, false);
-    toast(`+1 · You've added ${fmt(st.mine)} piece${st.mine === 1 ? '' : 's'} today`, true);
+    toast(`+1 · You've placed ${fmt(st.mine)} pixel${st.mine === 1 ? '' : 's'}`, true);
     return;
   }
-  // rejected: roll back the optimistic piece
-  if (stage.cells.get(key) === local) stage.remove(key, prev);
-  pending.delete(key);
+  // rejected: roll the optimistic pixel back unless someone has painted it since
+  if (ids[i] === prevId) board.set(i, prev, false);
   const b = res.body;
-  if (b.retryMs) cooldownUntil = Date.now() + b.retryMs;
-  else if (res.status !== 429) cooldownUntil = 0;
-  tapRing = null;
+  cooldownUntil = b.retryMs ? Date.now() + b.retryMs : 0;
   tickCooldown();
   toast(
-    b.error === 'cooldown' ? 'One piece every 4 seconds. Almost there.'
-    : b.error === 'rate' ? 'Lots of pieces from your network right now. Try again in a moment.'
-    : b.error === 'daily' ? "You've reached today's limit. A fresh board starts at midnight IST."
-    : "Couldn't reach the board. Check your connection.",
+    b.error === 'cooldown' ? 'One pixel every 4 seconds. Almost there.'
+    : b.error === 'rate' ? 'Lots of pixels from your network right now. Try again in a moment.'
+    : b.error === 'daily' ? "You've hit today's limit. It resets at 00:00 UTC."
+    : "Couldn't reach the canvas. Check your connection.",
   );
 }
 
-/** Applies a server event. Our own echo replaces the optimistic piece without re-animating. */
-function applyEvent(e: WireEvent, animate = true) {
-  const c = cellFromWire(e);
-  const k = keyOf(c);
-  st.lastId = Math.max(st.lastId, c.id);
-  const cur = stage.cells.get(k);
-  if (cur && cur.id >= c.id) return;
-  const p = pending.get(k);
-  if (p && cur === p.local) {
-    pending.delete(k);
-    if (c.who === who && c.piece === cur.piece && c.colour === cur.colour) {
-      stage.cells.set(k, c);
-      const a = stage.anims.get(k);
-      if (a) a.cell = c;
-      return;
-    }
-  }
-  stage.put(c, animate ? {} : undefined);
+/** Applies a server event in id order; our own echo is already on screen, so it doesn't flash again. */
+function applyEvent(e: WireEvent, flash = true) {
+  const [id, x, y, c, w] = e;
+  const i = y * SIZE + x;
+  st.lastId = Math.max(st.lastId, id);
+  if (id <= ids[i]) return;
+  ids[i] = id;
+  if (w === who) myPixels.add(i);
+  else myPixels.delete(i);
+  if (board.colours[i] !== c) board.set(i, c, flash && w !== who);
 }
 
 // ---------- live data ----------
-function setStats(s: { pieces?: number; people?: number; online?: number }) {
-  if (s.pieces != null) st.pieces = s.pieces;
+function setStats(s: { pixels?: number; people?: number; online?: number }) {
+  if (s.pixels != null) st.pixels = s.pixels;
   if (s.people != null) st.people = s.people;
   if (s.online != null) st.online = s.online;
-  $('#online b').textContent = st.online < 0 ? 'Connecting…' : `${fmt(st.online)} drawing now`;
+  $('#online b').textContent = st.online < 0 ? 'Connecting…' : `${fmt(st.online)} online now`;
   $('#online').classList.toggle('live', st.online > 0);
-  $('#stats').textContent = st.pieces
-    ? `${fmt(st.pieces)} piece${st.pieces === 1 ? '' : 's'} by ${fmt(st.people)} ${st.people === 1 ? 'person' : 'people'} today`
-    : 'A fresh board. Be the first today.';
+  $('#stats').textContent = st.pixels
+    ? `${fmt(st.pixels)} pixel${st.pixels === 1 ? '' : 's'} by ${fmt(st.people)} ${st.people === 1 ? 'person' : 'people'}`
+    : 'A blank canvas. Be the first.';
 }
 
 async function loadState() {
   const s = await getJSON<State>(`/api/state?d=${deviceId}`);
-  Object.assign(st, { day: s.day, dayNo: s.dayNo, lastId: s.lastId, mine: s.mine });
-  pending.clear();
-  stage.reset(s.cells.map(cellFromWire));
+  Object.assign(st, { lastId: s.lastId, mine: s.mine, since: s.since });
+  ids.fill(0);
+  myPixels.clear();
+  s.myPixels.forEach((i) => myPixels.add(i));
+  board.load(Uint8Array.from(atob(s.board), (ch) => ch.charCodeAt(0)));
   setStats(s);
   if (s.cooldownMs > 0) (cooldownUntil = Date.now() + s.cooldownMs), tickCooldown();
 }
@@ -220,7 +221,7 @@ const live = new Live(
     for (const e of m.e ?? []) applyEvent(e);
     setStats(m);
   },
-  (mode) => document.documentElement.dataset.transport = mode,
+  (mode) => (document.documentElement.dataset.transport = mode),
 );
 
 async function hello() {
@@ -230,33 +231,36 @@ async function hello() {
   } catch { /* retried in 15s */ }
 }
 
-// ---------- overlay: cooldown ring at the tap point, "show mine" pulses ----------
-stage.overlay = (g, now) => {
-  const d = stage.dpr;
+// ---------- overlay: selection reticle with colour preview, "show mine" pulses ----------
+board.overlay = (g, now) => {
+  const d = board.dpr;
   let more = false;
-  if (tapRing && now < tapRing.until) {
-    const k = (tapRing.until - now) / COOLDOWN;
-    g.lineWidth = 2.5 * d;
-    g.lineCap = 'round';
-    g.strokeStyle = `rgba(247,243,233,${0.55 * Math.min(1, k * 4)})`;
-    g.beginPath();
-    g.arc(tapRing.x * d, tapRing.y * d, 26 * d, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * k);
-    g.stroke();
-    more = true;
+  if (selected >= 0) {
+    const [x, y, w] = board.rectOf(selected);
+    const r = Math.max(w, 6 * d);
+    const ox = x + w / 2 - r / 2, oy = y + w / 2 - r / 2;
+    if (cooldownUntil <= Date.now()) {
+      g.globalAlpha = 0.75;
+      g.fillStyle = PALETTE[colour];
+      g.fillRect(ox, oy, r, r);
+      g.globalAlpha = 1;
+    }
+    g.lineWidth = 3 * d;
+    g.strokeStyle = '#0E1020';
+    g.strokeRect(ox - 2 * d, oy - 2 * d, r + 4 * d, r + 4 * d);
+    g.lineWidth = 1.5 * d;
+    g.strokeStyle = '#FFFFFF';
+    g.strokeRect(ox - 2 * d, oy - 2 * d, r + 4 * d, r + 4 * d);
   }
   if (now < highlightUntil) {
     const t = (highlightUntil - now) / 3000;
     const pulse = 0.5 + 0.5 * Math.sin(now / 120);
-    g.strokeStyle = `rgba(255,255,255,${(0.45 + 0.5 * pulse) * Math.min(1, t * 3)})`;
+    g.strokeStyle = `rgba(255,217,59,${(0.55 + 0.45 * pulse) * Math.min(1, t * 3)})`;
     g.lineWidth = 2 * d;
-    const v = stage.V();
-    for (const c of stage.cells.values()) {
-      if (c.who !== who) continue;
-      for (const [x, y, r] of copyCentres(v, c)) {
-        g.beginPath();
-        g.arc(x, y, r * (1.35 + pulse * 0.25), 0, Math.PI * 2);
-        g.stroke();
-      }
+    for (const i of myPixels) {
+      const [x, y, w] = board.rectOf(i);
+      const r = Math.max(w, 4 * d) + (4 + pulse * 4) * d;
+      g.strokeRect(x + w / 2 - r / 2, y + w / 2 - r / 2, r, r);
     }
     more = true;
   }
@@ -264,27 +268,12 @@ stage.overlay = (g, now) => {
 };
 
 function showMine() {
-  if (![...stage.cells.values()].some((c) => c.who === who)) {
-    toast(st.mine ? 'Your pieces have all been painted over. Add another!' : "You haven't placed a piece today yet.");
+  if (!myPixels.size) {
+    toast(st.mine ? 'Your pixels have all been painted over. Place another!' : "You haven't placed a pixel yet.");
     return;
   }
   highlightUntil = performance.now() + 3000;
-  stage.kick();
-}
-
-let cdRaf = 0;
-function tickCooldown() {
-  cancelAnimationFrame(cdRaf);
-  const ring = $<SVGCircleElement>('#cdring circle.fg');
-  const label = $('#cdlabel');
-  const step = () => {
-    const left = Math.max(0, cooldownUntil - Date.now());
-    ring.style.strokeDashoffset = String(113.1 * (left / COOLDOWN));
-    $('#cd').classList.toggle('ready', !left);
-    label.textContent = left ? `Next piece in ${(left / 1000).toFixed(1)}s` : 'Ready · tap the floor';
-    if (left) cdRaf = requestAnimationFrame(step);
-  };
-  step();
+  board.kick();
 }
 
 // ---------- toast, hint ----------
@@ -305,51 +294,29 @@ function dismissHint() {
   if (h.hidden) return;
   h.classList.add('gone');
   setTimeout(() => (h.hidden = true), 400);
-  store.set('rl.hint', '1');
+  store.set('pw.hint', '1');
 }
-if (!store.get('rl.hint')) $('#hint').hidden = false;
+if (!store.get('pw.hint')) $('#hint').hidden = false;
 
 // ---------- palette ----------
-const pieceBtns: HTMLButtonElement[] = [];
-const colourBtns: HTMLButtonElement[] = [];
-PIECES.forEach((_, i) => {
+const swatches = PALETTE.map((hex, i) => {
   const b = document.createElement('button');
-  b.className = 'opt';
+  b.className = 'swatch';
   b.setAttribute('role', 'radio');
-  b.setAttribute('aria-label', PIECE_NAMES[i]);
-  b.title = PIECE_NAMES[i];
-  b.append(document.createElement('canvas'));
-  b.onclick = () => select(i, sel.colour);
-  pieceBtns.push(b);
-  $('#pieces').append(b);
-});
-COLOURS.forEach((hex, i) => {
-  const b = document.createElement('button');
-  b.className = 'opt swatch';
-  b.setAttribute('role', 'radio');
-  b.setAttribute('aria-label', COLOUR_NAMES[i]);
-  b.title = COLOUR_NAMES[i];
+  b.setAttribute('aria-label', PALETTE_NAMES[i]);
+  b.title = PALETTE_NAMES[i];
   b.style.setProperty('--c', hex);
   b.append(document.createElement('i'));
-  b.onclick = () => select(sel.piece, i);
-  colourBtns.push(b);
+  b.onclick = () => pick(i);
   $('#colours').append(b);
+  return b;
 });
-function select(piece: number, colour: number) {
-  const recolour = colour !== sel.colour || !pieceBtns[0].dataset.drawn;
-  Object.assign(sel, { piece, colour });
-  store.set('rl.sel', `${piece},${colour}`);
-  pieceBtns.forEach((b, i) => b.setAttribute('aria-checked', String(i === piece)));
-  colourBtns.forEach((b, i) => b.setAttribute('aria-checked', String(i === colour)));
-  if (recolour)
-    pieceBtns.forEach((b, i) => {
-      const c = b.querySelector('canvas')!;
-      const px = Math.round(34 * Math.min(devicePixelRatio || 1, 3));
-      c.width = c.height = px;
-      const g = c.getContext('2d')!;
-      g.drawImage(spr(i, colour), 0, 0, SPR, SPR, 0, 0, px, px);
-      b.dataset.drawn = '1';
-    });
+function pick(c: number) {
+  colour = c;
+  store.set('pw.colour', String(c));
+  swatches.forEach((b, i) => b.setAttribute('aria-checked', String(i === c)));
+  placeBtn.style.setProperty('--c', PALETTE[c]);
+  board.kick();
 }
 
 // ---------- top bar ----------
@@ -361,15 +328,15 @@ const paintSound = () => {
 soundBtn.addEventListener('click', () => {
   setSound(!soundOn());
   paintSound();
-  if (soundOn()) chime(sel.colour);
+  if (soundOn()) chime(colour);
 });
-$('#gallery-btn').addEventListener('click', () => openGallery());
+$('#timelapse-btn').addEventListener('click', () => openTimelapse(false));
 $('#about-btn').addEventListener('click', () => openPanel($('#about')));
 $('#share-btn').addEventListener('click', async () => {
   const b = $<HTMLButtonElement>('#share-btn');
   b.disabled = true;
   try {
-    await shareCard([...stage.cells.values()], { day: st.day, dayNo: st.dayNo, people: st.people, mine: st.mine });
+    await shareCard(board.px, { people: st.people, pixels: st.pixels, mine: st.mine });
   } catch (e) {
     if ((e as Error).name !== 'AbortError') toast("Couldn't make the share card. Try again.");
   }
@@ -378,9 +345,10 @@ $('#share-btn').addEventListener('click', async () => {
 document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => closeTop()));
 
 // ---------- boot ----------
-select(sel.piece, sel.colour);
+pick(colour);
 paintSound();
 setStats({});
+paintPlace();
 layout();
 addEventListener('resize', layout);
 document.addEventListener('visibilitychange', hello);
@@ -399,6 +367,5 @@ document.addEventListener('visibilitychange', hello);
   hello();
   setInterval(hello, 15_000);
   const q = new URLSearchParams(location.search);
-  const rec = q.get('record') ?? q.get('timelapse');
-  if (rec) openTimelapse(rec === 'today' ? st.day : rec, q.has('record'));
+  if (q.has('record') || q.has('timelapse')) openTimelapse(q.has('record'));
 })();
