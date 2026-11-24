@@ -1,7 +1,8 @@
 import { crc32, deflateSync } from 'node:zlib';
 import { EMPTY, H as BH, PALETTE, PAPER, rgbOf as hex, W as BW } from '../shared/pixels.ts';
 
-const BG = hex('#0E1020');
+const BG = hex('#12121F');
+const SHADOW = [0, 0, 0];
 const COLOUR = [...PALETTE.map(hex), hex(PAPER)];
 
 /** Minimal PNG encoder: 8-bit RGB, no filtering. Enough for flat pixel art. */
@@ -37,24 +38,22 @@ export function ogImage(board: Uint8Array) {
   for (let y = 0; y < H; y++)
     for (let x = 0; x < W; x++) {
       const inside = x >= x0 && x < x0 + cw && y >= y0 && y < y0 + ch;
+      const shadow = x >= x0 + 8 && x < x0 + cw + 8 && y >= y0 + 8 && y < y0 + ch + 8; // hard offset shadow, like the app
       const bx = Math.min(BW - 1, Math.floor((x - x0) / k)), by = Math.min(BH - 1, Math.floor((y - y0) / k));
-      rgb.set(inside ? colourOf(board[by * BW + bx]) : BG, (y * W + x) * 3);
+      rgb.set(inside ? colourOf(board[by * BW + bx]) : shadow ? SHADOW : BG, (y * W + x) * 3);
     }
   return encodePng(W, H, rgb);
 }
 
-/** App icon: four rounded squares in the logo colours. */
+/** App icon: four square pixels in the logo colours (same as public/icon.svg). */
 export function iconImage(n: number) {
   const rgb = new Uint8Array(n * n * 3);
-  const tiles = [[112, 112, '#E8322E'], [268, 112, '#FFD93B'], [112, 268, '#3B82F6'], [268, 268, '#8BE04E']] as const;
-  const k = n / 512, size = 132 * k, r = 22 * k;
+  const tiles = [[112, 112, '#E8322E'], [268, 112, '#FFD23F'], [112, 268, '#3B82F6'], [268, 268, '#7CF05A']] as const;
+  const k = n / 512, size = 132 * k;
   for (let y = 0; y < n; y++)
     for (let x = 0; x < n; x++) {
       let c = BG;
-      for (const [tx, ty, col] of tiles) {
-        const dx = Math.max(tx * k + r - x, 0, x - (tx * k + size - r)), dy = Math.max(ty * k + r - y, 0, y - (ty * k + size - r));
-        if (x >= tx * k && x < tx * k + size && y >= ty * k && y < ty * k + size && dx * dx + dy * dy <= r * r) c = hex(col);
-      }
+      for (const [tx, ty, col] of tiles) if (x >= tx * k && x < tx * k + size && y >= ty * k && y < ty * k + size) c = hex(col);
       rgb.set(c, (y * n + x) * 3);
     }
   return encodePng(n, n, rgb);

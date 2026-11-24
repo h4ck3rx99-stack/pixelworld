@@ -30,6 +30,8 @@ let colour = (() => {
 // ---------- layout & view (pinch-zoom / pan) ----------
 let zoom = 1, panX = 0, panY = 0, base = { cx: 0, cy: 0, s: 1 };
 let area = { right: 0, top: 0, bottom: 0 }; // the part of the screen the canvas shows in
+let fillZoom = 1; // zoom at which the canvas fills its area (tall phone screens would otherwise leave big bands of nothing)
+let laidOut = false;
 const maxZoom = () => Math.max(1, 44 / base.s); // up to ~44 css px per pixel
 function layout() {
   const w = innerWidth, h = innerHeight;
@@ -39,9 +41,11 @@ function layout() {
   const right = side ? sheet.left : w, bottom = side ? h : sheet.top;
   document.documentElement.style.setProperty('--sheet-h', `${side ? 0 : h - bottom}px`);
   const availW = Math.max(120, right - 16), availH = Math.max(120, bottom - top - 12);
-  // fit the whole canvas, however big
+  // zoom 1 fits the whole canvas, however big; the first view fills the area instead
   base = { cx: right / 2, cy: top + (bottom - top) / 2, s: Math.max(0.05, Math.min(availW / W, availH / H)) };
   area = { right, top, bottom };
+  fillZoom = Math.max(availW / (W * base.s), availH / (H * base.s));
+  if (!laidOut) (laidOut = true), (zoom = fillZoom);
   zoom = Math.min(zoom, maxZoom());
   board.resize(w, h, view());
 }
@@ -158,7 +162,7 @@ const up = (e: PointerEvent) => {
       board.kick();
     }
     lastTap = { t: 0, x: 0, y: 0, i: -1, before: undefined };
-    return animateZoom(zoom > 1.5 ? 1 : Math.min(maxZoom(), 16 / base.s), p.x, p.y); // dive in / back out
+    return animateZoom(zoom > Math.max(1.5, fillZoom * 1.2) ? fillZoom : Math.min(maxZoom(), 16 / base.s), p.x, p.y); // dive in / back out
   }
   const i = board.pixelAt(p.x, p.y);
   lastTap = { t: e.timeStamp, x: p.x, y: p.y, i: picking ? -1 : i, before: drafts.get(i) };
@@ -646,10 +650,7 @@ $('#name-btn').addEventListener('click', () => openName());
 
 // ---------- leaderboard ----------
 type Leader = { name: string; n: number };
-$('#leaders-btn').addEventListener('click', async () => {
-  showProfile(false);
-  openPanel($('#leaders'));
-  const fill = (id: string, rows: Leader[]) => {
+function fill(id: string, rows: Leader[]) {
     const ol = $(id);
     ol.replaceChildren(...rows.map((r) => {
       const li = document.createElement('li');
@@ -661,13 +662,20 @@ $('#leaders-btn').addEventListener('click', async () => {
       li.classList.toggle('me', r.name === myName);
       li.tabIndex = 0;
       li.setAttribute('role', 'button');
-      const open = (e: Event) => (!(e instanceof KeyboardEvent) || e.key === 'Enter') && openProfile(r.name);
+      const open = (e: Event) => {
+        if (e instanceof KeyboardEvent && e.key !== 'Enter') return;
+        if ($('#leaders').hidden) showProfile(false), openPanel($('#leaders')); // from the side list
+        openProfile(r.name);
+      };
       li.onclick = open;
       li.onkeydown = open;
       return li;
     }));
     if (!rows.length) ol.innerHTML = '<li class="empty">Nobody with a name yet. Set yours and place a few pixels!</li>';
-  };
+}
+$('#leaders-btn').addEventListener('click', async () => {
+  showProfile(false);
+  openPanel($('#leaders'));
   try {
     const l = await getJSON<{ today: Leader[]; all: Leader[] }>('/api/leaders');
     fill('#leaders-today', l.today);
@@ -677,6 +685,16 @@ $('#leaders-btn').addEventListener('click', async () => {
     $('#leaders-note').textContent = "Couldn't load the leaderboard. Try again in a moment.";
   }
 });
+
+// Wide screens have room for today's top painters under the controls; refreshed while it's visible.
+async function sideTop() {
+  if (!$('#side-top').offsetParent || document.hidden) return;
+  try {
+    fill('#side-top-list', (await getJSON<{ today: Leader[] }>('/api/leaders')).today);
+  } catch { /* next refresh retries */ }
+}
+setInterval(sideTop, 30_000);
+addEventListener('resize', sideTop);
 
 const showProfile = (on: boolean) => {
   $('#profile').hidden = !on;
@@ -995,6 +1013,7 @@ document.addEventListener('visibilitychange', hello);
     }
   }
   live.start();
+  sideTop();
   hello();
   setInterval(hello, 15_000);
   const q = new URLSearchParams(location.search);
