@@ -2,7 +2,7 @@ import { EMPTY, H, PALETTE, PAPER, rgbOf as toRgb, W } from '../shared/pixels.ts
 
 const RGB = [...PALETTE, PAPER].map(toRgb);
 const rgbOf = (c: number) => RGB[c === EMPTY ? PALETTE.length : c];
-export const BG = '#0E1020';
+export const BG = '#12121F';
 
 /**
  * One W x H pixel canvas drawn crisp at any zoom. The pixels live on a 1:1 offscreen
@@ -95,12 +95,14 @@ export class Board {
     g.setTransform(1, 0, 0, 1, 0, 0);
     g.fillStyle = BG;
     g.fillRect(0, 0, this.cv.width, this.cv.height);
-    g.shadowColor = 'rgba(0,0,0,0.55)';
-    g.shadowBlur = 40 * d;
-    g.shadowOffsetY = 12 * d;
+    g.shadowColor = '#000'; // hard offset shadow, like the buttons
+    g.shadowBlur = 0;
+    g.shadowOffsetX = 6 * d;
+    g.shadowOffsetY = 6 * d;
     g.fillStyle = PAPER;
     g.fillRect(x0, y0, bw, bh);
     g.shadowColor = 'transparent';
+    g.shadowOffsetX = 0;
     g.imageSmoothingEnabled = false;
     g.drawImage(this.px, x0, y0, bw, bh);
 

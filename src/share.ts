@@ -4,7 +4,7 @@ import { fmt } from './ui.ts';
 
 /** 1080x1920 story card of the current canvas, shared through the Web Share API or downloaded. */
 export async function shareCard(pixels: HTMLCanvasElement, s: { people: number; pixels: number; mine: number }) {
-  await Promise.all([document.fonts.load('800 80px "Inter Variable"'), document.fonts.load('500 40px "Inter Variable"')]);
+  await Promise.all([document.fonts.load('700 80px "Silkscreen"'), document.fonts.load('400 40px "Space Mono"')]);
   const W = 1080, H = 1920, k = Math.min(960 / BW, 1200 / BH), bw = BW * k, bh = BH * k; // fit a 960 x 1200 box
   const cv = document.createElement('canvas');
   cv.width = W;
@@ -24,20 +24,20 @@ export async function shareCard(pixels: HTMLCanvasElement, s: { people: number; 
 
   g.textAlign = 'center';
   wordmark(g, W / 2, 200, 104);
-  g.font = '500 40px "Inter Variable", system-ui, sans-serif';
+  g.font = '400 40px "Space Mono", monospace';
   g.fillStyle = 'rgba(244,241,234,0.66)';
   g.fillText('One canvas. The whole world.', W / 2, 275);
 
   g.fillStyle = '#F4F1EA';
-  g.font = '700 58px "Inter Variable", system-ui, sans-serif';
+  g.font = '700 58px "Space Mono", monospace';
   g.fillText(`${fmt(s.pixels)} pixels by ${fmt(s.people)} ${s.people === 1 ? 'person' : 'people'}`, W / 2, 1680);
   if (s.mine) {
-    g.fillStyle = '#FFD93B';
-    g.font = '700 46px "Inter Variable", system-ui, sans-serif';
+    g.fillStyle = '#FFD23F';
+    g.font = '700 46px "Space Mono", monospace';
     g.fillText(`I placed ${fmt(s.mine)} of them`, W / 2, 1755);
   }
   g.fillStyle = 'rgba(244,241,234,0.6)';
-  g.font = '500 38px "Inter Variable", system-ui, sans-serif';
+  g.font = '400 38px "Space Mono", monospace';
   g.fillText(`Add yours → ${location.host}`, W / 2, 1860);
 
   const blob = await new Promise<Blob>((ok, no) => cv.toBlob((b) => (b ? ok(b) : no(new Error('toBlob'))), 'image/png'));
@@ -55,12 +55,12 @@ export async function shareCard(pixels: HTMLCanvasElement, s: { people: number; 
 
 /** "Pixel" in paper white + "World" in yellow, centred on x. */
 function wordmark(g: CanvasRenderingContext2D, x: number, y: number, px: number) {
-  g.font = `800 ${px}px "Inter Variable", system-ui, sans-serif`;
+  g.font = `700 ${px}px "Silkscreen", monospace`;
   const a = g.measureText('Pixel').width, b = g.measureText('World').width;
   g.textAlign = 'left';
   g.fillStyle = '#F4F1EA';
   g.fillText('Pixel', x - (a + b) / 2, y);
-  g.fillStyle = '#FFD93B';
+  g.fillStyle = '#FFD23F';
   g.fillText('World', x - (a + b) / 2 + a, y);
   g.textAlign = 'center';
 }

@@ -1,4 +1,7 @@
-import '@fontsource-variable/inter';
+import '@fontsource/silkscreen/400.css';
+import '@fontsource/silkscreen/700.css';
+import '@fontsource/space-mono/400.css';
+import '@fontsource/space-mono/700.css';
 import './style.css';
 import { BANK_SIZE, BASE, colourName, EMPTY, H, nearest, PALETTE, REGEN_MS, rgbOf, START_PIXELS, W, type WireEvent } from '../shared/pixels.ts';
 import { chime, setSound, soundOn } from './audio.ts';
@@ -438,7 +441,7 @@ board.overlay = (g, now) => {
     g.drawImage(board.px, m.x * d, m.y * d, m.w * d, m.h * d);
     const bx = (sx: number) => Math.max(0, Math.min(W, (sx - v.cx) / v.s + W / 2)), by = (sy: number) => Math.max(0, Math.min(H, (sy - v.cy) / v.s + H / 2));
     const x0 = bx(0), x1 = bx(area.right), y0 = by(area.top), y1 = by(area.bottom);
-    g.strokeStyle = '#FFD93B';
+    g.strokeStyle = '#FFD23F';
     g.lineWidth = 1.5 * d;
     g.strokeRect((m.x + (x0 / W) * m.w) * d, (m.y + (y0 / H) * m.h) * d, Math.max(2, ((x1 - x0) / W) * m.w) * d, Math.max(2, ((y1 - y0) / H) * m.h) * d);
   }
