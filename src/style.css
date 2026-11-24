@@ -107,7 +107,7 @@ nav { display: flex; }
 .tool:active:not(:disabled) { background: rgba(255, 255, 255, 0.08); }
 .tools .seg { margin-right: auto; }
 .info-row { display: flex; align-items: center; max-width: 520px; margin: 0 auto; padding-right: 8px; }
-.info-row .info { flex: 1; min-width: 0; margin: 4px 0 2px; }
+.info-row .info { flex: 1; min-width: 0; margin: 2px 0 0; line-height: 30px; } /* it's tappable, so at least 24px tall */
 .link { min-height: 32px; padding: 0 12px; border-radius: 99px; background: rgba(244, 241, 234, .1); color: var(--ink); font-size: 12px; font-weight: 650; }
 .card .skip { width: 100%; min-height: 48px; margin-top: 4px; border-radius: 14px; color: var(--ink-2); font-weight: 650; }
 .info {
