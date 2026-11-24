@@ -43,6 +43,7 @@
     <div class="meta">
       <span id="online" class="pill"><i></i><b>Connecting…</b></span>
       <button id="name-btn" class="pill name" type="button">Set your name</button>
+      <button id="leaders-btn" class="pill top" type="button" aria-label="Leaderboard"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4h8v5a4 4 0 0 1-8 0zM8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4M12 13v4M9 20h6"/></svg>Top</button>
       <span id="stats"></span>
     </div>
   </header>
@@ -111,6 +112,20 @@
       <button class="save" type="submit">Save name</button>
       <button class="skip" type="button" data-close>Not now</button>
     </form>
+  </div>
+
+  <div id="leaders" class="panel modal" role="dialog" aria-modal="true" aria-labelledby="leaders-title" hidden>
+    <div class="card">
+      <div class="panel-head">
+        <h2 id="leaders-title">Top painters</h2>
+        <button class="icon" type="button" data-close aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </div>
+      <div class="boards">
+        <section><h3>Today</h3><ol id="leaders-today" class="ranks"></ol></section>
+        <section><h3>All time</h3><ol id="leaders-all" class="ranks"></ol></section>
+      </div>
+      <p id="leaders-note" class="small"></p>
+    </div>
   </div>
 
   <div id="about" class="panel modal" role="dialog" aria-modal="true" aria-labelledby="about-title" hidden>

@@ -313,12 +313,14 @@ function setStats(s: { pixels?: number; people?: number; online?: number }) {
 }
 
 async function loadState() {
-  const s = await getJSON<State>(`/api/state?d=${deviceId}`);
-  Object.assign(st, { lastId: s.lastId, mine: s.mine, since: s.since });
+  const [s, b] = await Promise.all([getJSON<State>(`/api/state?d=${deviceId}`), fetch('/api/board')]);
+  if (!b.ok) throw new Error(`board ${b.status}`);
+  // The board can be up to a second old; x-last-id says where the live stream should pick up.
+  Object.assign(st, { lastId: Number(b.headers.get('x-last-id')) || 0, mine: s.mine, since: s.since });
   ids.fill(0);
   myPixels.clear();
   s.myPixels.forEach((i) => myPixels.add(i));
-  board.load(Uint8Array.from(atob(s.board), (ch) => ch.charCodeAt(0)));
+  board.load(new Uint8Array(await b.arrayBuffer()));
   setStats(s);
   bank = { tokens: s.tokens, at: Date.now() };
   paintPlace();
@@ -476,6 +478,34 @@ function openName(prompt = false) {
 }
 $('#name-btn').addEventListener('click', () => openName());
 
+// ---------- leaderboard ----------
+type Leader = { name: string; n: number };
+$('#leaders-btn').addEventListener('click', async () => {
+  openPanel($('#leaders'));
+  const fill = (id: string, rows: Leader[]) => {
+    const ol = $(id);
+    ol.replaceChildren(...rows.map((r) => {
+      const li = document.createElement('li');
+      const name = document.createElement('span');
+      const n = document.createElement('b');
+      name.textContent = r.name;
+      n.textContent = fmt(r.n);
+      li.append(name, n);
+      li.classList.toggle('me', r.name === myName);
+      return li;
+    }));
+    if (!rows.length) ol.innerHTML = '<li class="empty">Nobody with a name yet. Set yours and place a few pixels!</li>';
+  };
+  try {
+    const l = await getJSON<{ today: Leader[]; all: Leader[] }>('/api/leaders');
+    fill('#leaders-today', l.today);
+    fill('#leaders-all', l.all);
+    $('#leaders-note').textContent = myName ? `You're @${myName}.` : 'Set a name to appear here; anonymous pixels count toward nobody.';
+  } catch {
+    $('#leaders-note').textContent = "Couldn't load the leaderboard. Try again in a moment.";
+  }
+});
+
 // ---------- location links: ?x=&y=&z= opens zoomed in on a pixel ----------
 $('#link-btn').addEventListener('click', async () => {
   const url = `${location.origin}/?x=${lastTapped % W}&y=${(lastTapped / W) | 0}&z=${Math.round(base.s * zoom)}`;
@@ -541,7 +571,7 @@ $('#share-btn').addEventListener('click', async () => {
 });
 document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => closeTop()));
 addEventListener('keydown', (e) => {
-  if (e.target instanceof HTMLInputElement || !$('#name-panel').hidden) return;
+  if (e.target instanceof HTMLInputElement || !$('#name-panel').hidden || !$('#leaders').hidden) return;
   if (e.key === 'Enter' && !placeBtn.disabled) placeDrafts();
   if (e.key === 'd') setMode(mode === 'draw' ? 'move' : 'draw');
 });

@@ -1,17 +1,27 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { DatabaseSync } from 'node:sqlite';
 import { Hono, type Context } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { compress } from 'hono/compress';
 import { streamSSE, type SSEStreamingApi } from 'hono/streaming';
 import { getConnInfo } from '@hono/node-server/conninfo';
-import { BANK_SIZE, EMPTY, H, validPixel, W, type WireEvent } from '../shared/pixels.ts';
+import { BANK_SIZE, EMPTY, H, utcDay, validPixel, W, type WireEvent } from '../shared/pixels.ts';
 import { Limiter, type Bank, type LimitConfig } from './limits.ts';
 import { iconImage, ogImage } from './png.ts';
 
-export type Options = { dataDir: string; adminSecret?: string; limits: LimitConfig; now?: () => number };
+export type Options = {
+  dataDir: string;
+  adminSecret?: string;
+  limits: LimitConfig;
+  now?: () => number;
+  /** Embarko's scheduler sends this as a Bearer token to /tasks/* routes. */
+  cronSecret?: string;
+  /** Embarko file storage, where the daily backup goes. */
+  storage?: { url: string; token: string; app: string };
+};
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PRESENCE_MS = 30_000;
@@ -50,6 +60,10 @@ export function createApp(opts: Options) {
     nameGet: db.prepare('SELECT name FROM names WHERE device = ?'),
     nameOwner: db.prepare('SELECT device FROM names WHERE name = ? COLLATE NOCASE'),
     namePut: db.prepare('INSERT OR REPLACE INTO names (device, name) VALUES (?, ?)'),
+    myEvents: db.prepare('SELECT x, y FROM events WHERE device = ?'),
+    leadersAll: db.prepare('SELECT n.name, COUNT(*) AS n FROM events e JOIN names n ON n.device = e.device GROUP BY e.device ORDER BY n DESC LIMIT 10'),
+    leadersSince: db.prepare('SELECT n.name, COUNT(*) AS n FROM events e JOIN names n ON n.device = e.device WHERE e.ts >= ? GROUP BY e.device ORDER BY n DESC LIMIT 10'),
+    namesAll: db.prepare('SELECT device, name FROM names'),
   };
 
   // ---- the board, kept in memory and rebuilt from the event log on start ----
@@ -62,6 +76,7 @@ export function createApp(opts: Options) {
   let pixels = 0;
   let lastId = 0;
   let firstTs = 0;
+  let version = 0; // bumps on every change, so cached copies of the board know when they're stale
 
   function load() {
     board = new Uint8Array(W * H).fill(EMPTY);
@@ -73,6 +88,8 @@ export function createApp(opts: Options) {
     lastId = 0;
     firstTs = 0;
     for (const r of q.all.all() as Row[]) apply(r);
+    version++;
+    boardGz = null; // admin changes must show up at once, not after the cache interval
   }
   function apply(r: Row) {
     const i = r.y * W + r.x;
@@ -85,7 +102,9 @@ export function createApp(opts: Options) {
     pixels++;
     lastId = r.id;
     firstTs ||= r.ts;
+    version++;
   }
+  let boardGz: { version: number; lastId: number; at: number; buf: Buffer } | null = null;
   load();
 
   // ---- presence and live fan-out ----
@@ -151,17 +170,55 @@ export function createApp(opts: Options) {
   app.use('/api/log', compress());
   app.use('/api/*', bodyLimit({ maxSize: 4096, onError: (c) => c.json({ error: 'too_large' }, 413) }));
 
+  // The whole board as raw bytes (one per pixel), gzipped once and shared by every visitor.
+  // Rebuilt at most once a second; x-last-id says which events it already includes, and the
+  // live stream fills in anything newer.
+  app.get('/api/board', () => {
+    if (!boardGz || (boardGz.version !== version && now() - boardGz.at >= 1000))
+      boardGz = { version, lastId, at: now(), buf: gzipSync(board) };
+    return new Response(new Uint8Array(boardGz.buf), {
+      headers: { 'content-type': 'application/octet-stream', 'content-encoding': 'gzip', 'cache-control': 'no-store', 'x-last-id': String(boardGz.lastId) },
+    });
+  });
+
+  // Top named painters today (UTC) and of all time. Anonymous painters don't appear.
+  let leaders: { at: number; body: unknown } = { at: -Infinity, body: null };
+  app.get('/api/leaders', (c) => {
+    if (now() - leaders.at > 30_000)
+      leaders = { at: now(), body: { today: q.leadersSince.all(Date.parse(utcDay(now()))), all: q.leadersAll.all() } };
+    return c.json(leaders.body);
+  });
+
+  // Daily backup, called by Embarko's scheduler (see embarko.json). Saves the full event log and
+  // names to the app's file storage and keeps the newest 14.
+  app.get('/tasks/backup', async (c) => {
+    if (!opts.cronSecret || c.req.header('authorization') !== `Bearer ${opts.cronSecret}`) return c.text('unauthorized', 401);
+    const st = opts.storage;
+    if (!st) return c.text('file storage is not configured', 503);
+    // shortcut: builds the whole export in memory (~70 bytes per event); fine to ~1M events, stream it beyond that.
+    const events = q.exportAll.all();
+    const body = gzipSync(JSON.stringify({ w: W, h: H, at: now(), events, names: q.namesAll.all() }));
+    const base = `${st.url}/apps/${st.app}/files`, auth = { authorization: `Bearer ${st.token}` };
+    const put = await fetch(`${base}/backup-${utcDay(now())}.json.gz`, { method: 'PUT', headers: { ...auth, 'content-length': String(body.length) }, body });
+    if (!put.ok) return c.text(`upload failed: ${put.status} ${await put.text()}`, 502);
+    const list = (await fetch(base, { headers: auth }).then((r) => r.json()).catch(() => ({}))) as { files?: { id: string; filename: string }[] };
+    const old = (list.files ?? []).filter((f) => f.filename.startsWith('backup-')).slice(14); // the list is newest first
+    for (const f of old) await fetch(`${base}/${f.id}`, { method: 'DELETE', headers: auth });
+    return c.text(`Backed up ${events.length} events (${body.length} bytes); removed ${old.length} old backups`);
+  });
+
   app.get('/api/health', (c) => c.json({ ok: true, rss: process.memoryUsage().rss, clients: clients.size }));
 
   app.get('/api/state', (c) => {
     const d = c.req.query('d') ?? '';
     const me = UUID.test(d) ? whoOf(d) : '';
-    const myPixels: number[] = [];
+    // Only this device's own events, kept where it is still the last painter (no full-board scan).
     const wid = me ? whoIds.get(me) : 0;
-    if (wid) owner.forEach((w, i) => w === wid && myPixels.push(i));
+    const myPixels = new Set<number>();
+    if (wid) for (const { x, y } of q.myEvents.all(d) as { x: number; y: number }[]) if (owner[y * W + x] === wid) myPixels.add(y * W + x);
     return c.json({
-      w: W, h: H, lastId, board: Buffer.from(board).toString('base64'), ...stats(), since: firstTs,
-      mine: me ? mine.get(d) ?? 0 : 0, myPixels,
+      w: W, h: H, lastId, ...stats(), since: firstTs, myPixels: [...myPixels],
+      mine: me ? mine.get(d) ?? 0 : 0,
       tokens: limiter.tokens(me ? d : '', now()),
       name: me ? (q.nameGet.get(d) as { name: string } | undefined)?.name ?? null : null,
     });

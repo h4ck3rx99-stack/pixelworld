@@ -7,6 +7,10 @@ const env = (k: string, d: number) => Number(process.env[k]) || d;
 const { app } = createApp({
   dataDir: process.env.DATA_DIR || './data',
   adminSecret: process.env.ADMIN_SECRET || undefined,
+  cronSecret: process.env.CRON_SECRET || undefined,
+  storage: process.env.STORAGE_URL && process.env.STORAGE_TOKEN
+    ? { url: process.env.STORAGE_URL, token: process.env.STORAGE_TOKEN, app: process.env.APP_NAME || 'pixelworld' }
+    : undefined,
   limits: {
     ipPerMin: env('IP_PER_MIN', 400), // a few friends on one Wi-Fi can each spend their 64 at once
     ipDaily: env('IP_DAILY', 20000),

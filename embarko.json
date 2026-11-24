@@ -1,4 +1,7 @@
 {
   "$schema": "https://embarko.ai/schema/embarko.json",
-  "appId": "cmwtekx7602xyngff0cebl6yn"
+  "appId": "cmwtekx7602xyngff0cebl6yn",
+  "schedules": [
+    { "cron": "0 3 * * *", "path": "/tasks/backup", "timezone": "UTC", "name": "daily backup" }
+  ]
 }

@@ -1,8 +1,8 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { inflateSync } from 'node:zlib';
+import { gunzipSync, inflateSync } from 'node:zlib';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BANK_SIZE, EMPTY, H, REGEN_MS, W } from '../shared/pixels.ts';
 import { createApp } from './app.ts';
 
@@ -26,7 +26,7 @@ type One = { d: string; x: number; y: number; colour: number };
 const post = (app: App, body: object) =>
   app.request('/api/place', { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json', 'x-forwarded-for': '1.2.3.4' } });
 const place = (app: App, { d, x, y, colour }: One) => post(app, { d, pixels: [[x, y, colour]] });
-const boardOf = (s: { board: string }) => new Uint8Array(Buffer.from(s.board, 'base64'));
+const boardOf = async (a: App) => new Uint8Array(gunzipSync(Buffer.from(await (await a.request('/api/board')).arrayBuffer())));
 
 describe('server', () => {
   it('places, validates, and serves deltas', async () => {
@@ -44,7 +44,7 @@ describe('server', () => {
     expect((await place(app, { d: D1, x: 3, y: 7, colour: 9 })).status).toBe(200); // overwrites the pixel
 
     const state = await (await app.request(`/api/state?d=${D1}`)).json();
-    const board = boardOf(state);
+    const board = await boardOf(app);
     expect(board.length).toBe(W * H);
     expect(board[7 * W + 3]).toBe(9);
     expect(board[0]).toBe(EMPTY);
@@ -64,7 +64,7 @@ describe('server', () => {
     inst!.close();
     inst = createApp({ dataDir: dir, limits: { ipPerMin: 1000, ipDaily: 100_000 }, now: () => t });
     const s = await (await inst.app.request('/api/state')).json();
-    expect(boardOf(s)[2 * W + 1]).toBe(3);
+    expect((await boardOf(inst.app))[2 * W + 1]).toBe(3);
     expect(s.pixels).toBe(1);
   });
 
@@ -154,13 +154,67 @@ describe('server', () => {
     const erase = (body: object) => app.request('/api/admin/erase', { method: 'POST', headers: auth, body: JSON.stringify(body) });
     expect((await erase({ x: 0, y: 0, w: 20, h: 20, since: before + 1 })).status).toBe(200);
     let s = await (await app.request('/api/state')).json();
-    expect(boardOf(s)[10 * W + 10]).toBe(1); // back to how it was
-    expect(boardOf(s)[50 * W + 50]).toBe(3); // untouched
+    expect((await boardOf(app))[10 * W + 10]).toBe(1); // back to how it was
+    expect((await boardOf(app))[50 * W + 50]).toBe(3); // untouched
     expect(await (await erase({ x: 0, y: 0, w: 20, h: 20 })).json()).toMatchObject({ deleted: 1 });
     s = await (await app.request('/api/state')).json();
-    expect(boardOf(s)[10 * W + 10]).toBe(EMPTY);
+    expect((await boardOf(app))[10 * W + 10]).toBe(EMPTY);
     expect((await erase({ x: W - 5, y: 0, w: 10, h: 1 })).status).toBe(400); // off the canvas
     expect((await app.request('/api/admin/erase', { method: 'POST', body: '{}' })).status).toBe(404); // needs the secret
+  });
+
+  it('serves the board as one cached gzip and says which events it includes', async () => {
+    const app = boot();
+    await place(app, { d: D1, x: 2, y: 2, colour: 6 });
+    const r1 = await app.request('/api/board');
+    expect(r1.headers.get('content-encoding')).toBe('gzip');
+    const id1 = Number(r1.headers.get('x-last-id'));
+    expect(gunzipSync(Buffer.from(await r1.arrayBuffer()))[2 * W + 2]).toBe(6);
+    await place(app, { d: D2, x: 3, y: 3, colour: 6 });
+    // within a second the cached copy is reused, and its x-last-id tells the client to stream the rest
+    const r2 = await app.request('/api/board');
+    expect(Number(r2.headers.get('x-last-id'))).toBe(id1);
+    expect((await (await app.request(`/api/events?since=${id1}`)).json()).e.length).toBe(1);
+    t += 1000;
+    expect((await boardOf(app))[3 * W + 3]).toBe(6);
+  });
+
+  it('ranks named painters on the leaderboard', async () => {
+    const app = boot();
+    const setName = (d: string, name: string) =>
+      app.request('/api/name', { method: 'POST', body: JSON.stringify({ d, name }), headers: { 'content-type': 'application/json' } });
+    await setName(D1, 'Ada');
+    await setName(D2, 'Bo');
+    await post(app, { d: D1, pixels: [[1, 1, 1], [2, 1, 1], [3, 1, 1]] });
+    await post(app, { d: D2, pixels: [[1, 2, 1]] });
+    await post(app, { d: '33333333-3333-4333-8333-333333333333', pixels: [[1, 3, 1], [2, 3, 1], [3, 3, 1], [4, 3, 1]] }); // anonymous: not listed
+    const l = await (await app.request('/api/leaders')).json();
+    expect(l.all).toEqual([{ name: 'Ada', n: 3 }, { name: 'Bo', n: 1 }]);
+    expect(l.today).toEqual(l.all);
+  });
+
+  it('backs up to file storage on the scheduler\'s call and keeps 14', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'pixelworld-'));
+    inst = createApp({ dataDir: dir, limits: { ipPerMin: 1000, ipDaily: 100_000 }, now: () => t, cronSecret: 'cron', storage: { url: 'https://store.test', token: 'tok', app: 'pw' } });
+    const app = inst.app;
+    await place(app, { d: D1, x: 1, y: 1, colour: 1 });
+    const calls: { method: string; url: string }[] = [];
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit = {}) => {
+      calls.push({ method: init.method ?? 'GET', url });
+      if (init.method === 'PUT') return new Response('{}', { status: 201 });
+      if (!init.method) return Response.json({ files: Array.from({ length: 16 }, (_, i) => ({ id: `f${i}`, filename: `backup-${i}.json.gz` })) });
+      return new Response('{}');
+    });
+    try {
+      expect((await app.request('/tasks/backup')).status).toBe(401);
+      const r = await app.request('/tasks/backup', { headers: { authorization: 'Bearer cron' } });
+      expect(r.status).toBe(200);
+      expect(await r.text()).toContain('Backed up 1 events');
+      expect(calls[0]).toMatchObject({ method: 'PUT', url: expect.stringMatching(/^https:\/\/store\.test\/apps\/pw\/files\/backup-\d{4}-\d{2}-\d{2}\.json\.gz$/) });
+      expect(calls.filter((c) => c.method === 'DELETE').map((c) => c.url)).toEqual(['https://store.test/apps/pw/files/f14', 'https://store.test/apps/pw/files/f15']);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('protects admin endpoints', async () => {
@@ -173,7 +227,7 @@ describe('server', () => {
     expect((await purge.json()).deleted).toBe(1);
     const s = await (await app.request('/api/state')).json();
     expect(s.pixels).toBe(0);
-    expect(boardOf(s)[5 * W + 5]).toBe(EMPTY);
+    expect((await boardOf(app))[5 * W + 5]).toBe(EMPTY);
     expect((await app.request('/api/admin/export', { headers: auth })).status).toBe(200);
   });
 });

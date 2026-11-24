@@ -75,6 +75,12 @@ curl https://pixelworld.embarko.app/api/admin/export -H "Authorization: Bearer $
 
 Connected clients reload the canvas automatically after a reset or purge.
 
+## Backups
+
+Embarko calls `GET /tasks/backup` every day at 03:00 UTC (the schedule lives in `embarko.json`). It
+uploads `backup-YYYY-MM-DD.json.gz` (every event plus usernames) to the app's Embarko file storage and
+keeps the newest 14. Find them in the app's Files tab on Embarko.
+
 ## Deploy (Embarko)
 
 `npm run build` and `npm start` are what Embarko runs. Deploy the committed source:
@@ -102,6 +108,9 @@ Set `ADMIN_SECRET` in the app's env vars on Embarko.
   transaction, as many as the bank allows; the client keeps the rest as drafts.
 - **Pixel info**: `GET /api/pixel?x=&y=` returns how many times a pixel was painted, when, and the last
   painter's username (`by`, null if they never set one). Device ids are never exposed.
+- **Board loading**: `GET /api/board` is the whole canvas as raw bytes, gzipped once and shared by
+  every visitor (rebuilt at most once a second; `x-last-id` tells the client where the live stream picks up).
+- **Leaderboard**: `GET /api/leaders` lists the top 10 named painters today (UTC) and of all time.
 - **Usernames**: `POST /api/name {d, name}`; unique ignoring case so nobody can impersonate someone.
 - **Rendering** (`src/board.ts`): Canvas 2D. Pixels live on a 2400 × 1350 offscreen canvas;
   each frame is one scaled `drawImage` with smoothing off, plus a faint grid when zoomed in.
