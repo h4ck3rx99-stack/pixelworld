@@ -314,7 +314,7 @@ nav { display: flex; }
   .tools { flex-wrap: wrap; justify-content: space-between; }
   .tools .seg { margin-right: 0; }
   .tool { min-width: 42px; padding: 0 2px; }
-  /* a column of its own: bigger colours, and Place pinned to the bottom instead of a block of nothing under it */
+  /* a column of its own: bigger colours, and today's top painters fill the rest instead of a block of nothing */
   #sheet { display: flex; flex-direction: column; gap: 6px; overflow-x: hidden; }
   .palette { grid-template-columns: repeat(6, 1fr); width: 100%; row-gap: 4px; }
   .swatch { height: 50px; }
