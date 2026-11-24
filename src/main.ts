@@ -250,6 +250,11 @@ async function placeDrafts() {
     const left = Math.floor(tokensNow());
     const kept = batch.length - placed.length;
     toast(kept ? `+${placed.length} · ${kept} kept as drafts` : `+${placed.length} · ${left} pixel${left === 1 ? '' : 's'} left`, true);
+    // New players get asked once, right after their first pixels go up, whether to sign them.
+    if (!myName && !store.get('pw.nameAsked')) {
+      store.set('pw.nameAsked', '1');
+      setTimeout(() => openName(true), 900);
+    }
   } else {
     toast(
       b.error === 'empty' ? 'Out of pixels. One comes back every 30 seconds.'
@@ -282,6 +287,7 @@ const ago = (ts: number) => {
 let infoSeq = 0;
 async function showInfo(i: number) {
   lastTapped = i;
+  $('#link-btn').hidden = false;
   const x = i % W, y = (i / W) | 0, seq = ++infoSeq;
   const el = $('#info');
   el.textContent = `${x}, ${y}`;
@@ -458,12 +464,36 @@ function showName(n: string | null) {
   b.textContent = n ? `@${n}` : 'Set your name';
   b.classList.toggle('set', !!n);
 }
-$('#name-btn').addEventListener('click', () => {
+function openName(prompt = false) {
+  $('#name-title').textContent = prompt ? 'Put your name on your pixels?' : 'Your name';
+  $('#name-intro').textContent = prompt
+    ? 'Anyone who taps your pixels will see "by your name". You can change it any time, or skip and stay anonymous.'
+    : 'Shown as "by your name" when someone taps a pixel you painted. Leave it unset to stay anonymous.';
   $<HTMLInputElement>('#name-input').value = myName ?? '';
   $('#name-error').textContent = '';
   openPanel($('#name-panel'));
   setTimeout(() => $<HTMLInputElement>('#name-input').focus(), 300);
+}
+$('#name-btn').addEventListener('click', () => openName());
+
+// ---------- location links: ?x=&y=&z= opens zoomed in on a pixel ----------
+$('#link-btn').addEventListener('click', async () => {
+  const url = `${location.origin}/?x=${lastTapped % W}&y=${(lastTapped / W) | 0}&z=${Math.round(base.s * zoom)}`;
+  try {
+    if (navigator.share && matchMedia('(pointer: coarse)').matches) await navigator.share({ url, text: 'Look at this on PixelWorld' });
+    else await navigator.clipboard.writeText(url), toast('Link copied');
+  } catch (e) {
+    if ((e as Error).name !== 'AbortError') toast(url);
+  }
 });
+function goTo(x: number, y: number, z: number) {
+  zoom = Math.min(maxZoom(), Math.max(1, z / base.s));
+  const s = base.s * zoom;
+  panX = -(x + 0.5 - W / 2) * s;
+  panY = -(y + 0.5 - H / 2) * s;
+  clampPan();
+  showInfo(y * W + x);
+}
 $('#name-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const name = $<HTMLInputElement>('#name-input').value;
@@ -543,4 +573,9 @@ document.addEventListener('visibilitychange', hello);
   setInterval(hello, 15_000);
   const q = new URLSearchParams(location.search);
   if (q.has('record') || q.has('timelapse')) openTimelapse(q.has('record'));
+  const lx = Number(q.get('x')), ly = Number(q.get('y'));
+  if (q.has('x') && q.has('y') && Number.isInteger(lx) && Number.isInteger(ly) && lx >= 0 && ly >= 0 && lx < W && ly < H) {
+    dismissHint();
+    goTo(lx, ly, Number(q.get('z')) || 16);
+  }
 })();

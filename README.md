@@ -40,7 +40,7 @@ database and takes no URL, so it cannot be pointed at production. Fake people "d
 walks. `--transport sse|poll|mixed` exercises both live transports; `--seed N` pre-fills the canvas;
 `--keep` leaves the server up so you can open it (run `npm run build` first).
 
-Useful URL flags: `?transport=poll` forces the polling fallback, `?timelapse` opens the replay,
+Useful URL flags: `?x=1200&y=600&z=16` opens zoomed in on a pixel (the Link button next to pixel info copies one), `?transport=poll` forces the polling fallback, `?timelapse` opens the replay,
 `?record` opens record mode directly (tap to play, double-tap to exit).
 
 ## Environment variables
@@ -65,6 +65,8 @@ curl -X POST https://pixelworld.embarko.app/api/admin/reset -H "Authorization: B
 # remove every pixel a device ever placed (find the id in the export)
 curl -X POST https://pixelworld.embarko.app/api/admin/purge -H "Authorization: Bearer $ADMIN_SECRET" \
      -H 'content-type: application/json' -d '{"device":"<uuid>"}'
+# roll an area back to how it looked before a time (ms timestamp); leave out "since" to wipe it blank
+curl -X POST https://pixelworld.embarko.app/api/admin/erase -H "Authorization: Bearer $ADMIN_SECRET"      -H 'content-type: application/json' -d '{"x":100,"y":200,"w":50,"h":40,"since":1795500000000}'
 # remove an offensive username (the person shows as anonymous again)
 curl -X POST https://pixelworld.embarko.app/api/admin/clear-name -H "Authorization: Bearer $ADMIN_SECRET" \n     -H 'content-type: application/json' -d '{"name":"<name>"}'
 # export the full event log, with device ids

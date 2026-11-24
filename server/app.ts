@@ -298,6 +298,18 @@ export function createApp(opts: Options) {
     afterAdminChange();
     return c.json({ ok: true, deleted: n });
   });
+  // Body: { x, y, w, h, since? } in canvas pixels. With since (ms timestamp) the area goes back to how
+  // it looked before then; without it the area is wiped blank. Either way the events are deleted.
+  admin.post('/erase', async (c) => {
+    const b = await c.req.json().catch(() => null);
+    const { x, y, w, h } = b ?? {};
+    if (!validPixel(x, y, 0) || !Number.isInteger(w) || !Number.isInteger(h) || w < 1 || h < 1 || x + w > W || y + h > H)
+      return c.json({ error: 'need x, y, w, h inside the canvas' }, 400);
+    const since = Number.isFinite(b.since) ? b.since : -Infinity;
+    const n = db.prepare('DELETE FROM events WHERE x >= ? AND x < ? AND y >= ? AND y < ? AND ts >= ?').run(x, x + w, y, y + h, since).changes;
+    afterAdminChange();
+    return c.json({ ok: true, deleted: n });
+  });
   admin.post('/clear-name', async (c) => {
     const b = await c.req.json().catch(() => null);
     if (!b || typeof b.name !== 'string') return c.json({ error: 'name required' }, 400);

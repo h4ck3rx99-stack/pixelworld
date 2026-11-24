@@ -74,7 +74,7 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4l2.4 5 5.6.6-4.2 3.8 1.2 5.6L12 16.2 7 19l1.2-5.6L4 9.6 9.6 9z"/></svg><span>Mine</span>
       </button>
     </div>
-    <p id="info" class="info" aria-live="polite">Tap a pixel to see its history</p>
+    <div class="info-row"><p id="info" class="info" aria-live="polite">Tap a pixel to see its history</p><button id="link-btn" class="link" type="button" hidden>Link</button></div>
     <div id="colours" class="palette" role="radiogroup" aria-label="Colour"></div>
     <div class="actions">
       <button id="place" class="place" type="button" disabled>
@@ -105,10 +105,11 @@
         <h2 id="name-title">Your name</h2>
         <button class="icon" type="button" data-close aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
       </div>
-      <p>Shown as "by your name" when someone taps a pixel you painted. Leave it unset to stay anonymous.</p>
+      <p id="name-intro">Shown as "by your name" when someone taps a pixel you painted. Leave it unset to stay anonymous.</p>
       <input id="name-input" name="name" maxlength="20" minlength="2" required placeholder="2–20 letters or numbers" />
       <p id="name-error" class="small" aria-live="polite"></p>
       <button class="save" type="submit">Save name</button>
+      <button class="skip" type="button" data-close>Not now</button>
     </form>
   </div>
 

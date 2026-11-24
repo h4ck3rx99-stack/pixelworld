@@ -143,6 +143,26 @@ describe('server', () => {
     expect((await (await app.request(`/api/state?d=${D1}`)).json()).name).toBeNull();
   });
 
+  it('lets the admin roll an area back in time or wipe it', async () => {
+    const app = boot();
+    await place(app, { d: D1, x: 10, y: 10, colour: 1 }); // the "good" art
+    const before = t;
+    t += 60_000;
+    await place(app, { d: D2, x: 10, y: 10, colour: 3 }); // vandalism on top
+    await place(app, { d: D2, x: 50, y: 50, colour: 3 }); // outside the area
+    const auth = { authorization: 'Bearer s3cret', 'content-type': 'application/json' };
+    const erase = (body: object) => app.request('/api/admin/erase', { method: 'POST', headers: auth, body: JSON.stringify(body) });
+    expect((await erase({ x: 0, y: 0, w: 20, h: 20, since: before + 1 })).status).toBe(200);
+    let s = await (await app.request('/api/state')).json();
+    expect(boardOf(s)[10 * W + 10]).toBe(1); // back to how it was
+    expect(boardOf(s)[50 * W + 50]).toBe(3); // untouched
+    expect(await (await erase({ x: 0, y: 0, w: 20, h: 20 })).json()).toMatchObject({ deleted: 1 });
+    s = await (await app.request('/api/state')).json();
+    expect(boardOf(s)[10 * W + 10]).toBe(EMPTY);
+    expect((await erase({ x: W - 5, y: 0, w: 10, h: 1 })).status).toBe(400); // off the canvas
+    expect((await app.request('/api/admin/erase', { method: 'POST', body: '{}' })).status).toBe(404); // needs the secret
+  });
+
   it('protects admin endpoints', async () => {
     const app = boot();
     await place(app, { d: D1, x: 5, y: 5, colour: 1 });
