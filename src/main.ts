@@ -357,6 +357,18 @@ function setStats(s: { pixels?: number; people?: number; online?: number }) {
 async function loadState() {
   const [s, b] = await Promise.all([getJSON<State>(`/api/state?d=${deviceId}`), fetch('/api/board')]);
   if (!b.ok) throw new Error(`board ${b.status}`);
+  // After a full reset everyone starts from scratch: forget everything this browser saved, then reload.
+  const was = store.get('pw.epoch');
+  if (was !== s.epoch) {
+    const played = was !== null || store.get('pw.welcome') !== null || store.get('pw.hint') !== null;
+    if (played) {
+      store.clear('pw.');
+      store.set('pw.epoch', s.epoch);
+      location.reload();
+      return new Promise<never>(() => {}); // the page is going away
+    }
+    store.set('pw.epoch', s.epoch);
+  }
   // The board can be up to a second old; x-last-id says where the live stream should pick up.
   Object.assign(st, { lastId: Number(b.headers.get('x-last-id')) || 0, mine: s.mine, since: s.since });
   ids.fill(0);

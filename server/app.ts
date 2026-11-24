@@ -60,7 +60,16 @@ export function createApp(opts: Options) {
     CREATE TABLE IF NOT EXISTS names (device TEXT PRIMARY KEY, name TEXT NOT NULL);
     CREATE UNIQUE INDEX IF NOT EXISTS names_unique ON names(name COLLATE NOCASE);
     CREATE TABLE IF NOT EXISTS reports (id INTEGER PRIMARY KEY AUTOINCREMENT, x INTEGER NOT NULL, y INTEGER NOT NULL, device TEXT NOT NULL, ts INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
   `);
+  // Which generation of the canvas this is. A full reset starts a new one, and browsers that saved
+  // things under an older one forget all of it (device id, intro, colours, guide image).
+  const newEpoch = () => {
+    const e = Date.now().toString(36);
+    db.prepare('INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)').run('epoch', e);
+    return e;
+  };
+  let epoch = (db.prepare("SELECT v FROM meta WHERE k = 'epoch'").get() as { v: string } | undefined)?.v ?? newEpoch();
   const q = {
     insert: db.prepare('INSERT INTO events (x, y, colour, device, who, ts) VALUES (?, ?, ?, ?, ?, ?)'),
     all: db.prepare('SELECT * FROM events ORDER BY id'),
@@ -237,7 +246,7 @@ export function createApp(opts: Options) {
     if (me && !q.bankGet.get(d)) q.bankPut.run(d, START_PIXELS, now()); // the refill clock starts on the first visit
     if (wid) for (const { x, y } of q.myEvents.all(d) as { x: number; y: number }[]) if (owner[y * W + x] === wid) myPixels.add(y * W + x);
     return c.json({
-      w: W, h: H, lastId, ...stats(), since: firstTs, myPixels: [...myPixels],
+      w: W, h: H, lastId, ...stats(), since: firstTs, myPixels: [...myPixels], epoch,
       mine: me ? mine.get(d) ?? 0 : 0,
       tokens: limiter.tokens(me ? d : '', now()),
       name: me ? (q.nameGet.get(d) as { name: string } | undefined)?.name ?? null : null,
@@ -389,7 +398,10 @@ export function createApp(opts: Options) {
   admin.post('/reset', async (c) => {
     const all = (await c.req.json().catch(() => null))?.all === true;
     const n = db.prepare('DELETE FROM events').run().changes;
-    if (all) for (const t of ['names', 'banks', 'reports']) db.prepare(`DELETE FROM ${t}`).run();
+    if (all) {
+      for (const t of ['names', 'banks', 'reports']) db.prepare(`DELETE FROM ${t}`).run();
+      epoch = newEpoch();
+    }
     afterAdminChange();
     return c.json({ ok: true, deleted: n });
   });

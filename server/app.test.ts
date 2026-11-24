@@ -300,10 +300,14 @@ describe('server', () => {
     await app.request('/api/name', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ d: D1, name: 'Ada' }) });
     await app.request('/api/report', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ d: D1, x: 5, y: 5 }) });
     const auth = { authorization: 'Bearer s3cret', 'content-type': 'application/json' };
+    const before = (await (await app.request('/api/state')).json()).epoch;
+    await new Promise((ok) => setTimeout(ok, 5)); // the epoch is time based
     const r = await app.request('/api/admin/reset', { method: 'POST', headers: auth, body: JSON.stringify({ all: true }) });
     expect((await r.json()).deleted).toBe(1);
     const s = await (await app.request(`/api/state?d=${D1}`)).json();
     expect([s.pixels, s.name ?? null, s.tokens]).toEqual([0, null, START_PIXELS]);
+    expect(s.epoch).toEqual(expect.any(String));
+    expect(s.epoch).not.toBe(before); // browsers that saved things before the reset will forget them
     expect((await (await app.request("/api/admin/reports", { headers: auth })).json()).areas).toEqual([]);
   });
 });

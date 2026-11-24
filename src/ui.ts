@@ -8,6 +8,10 @@ export const store = {
   set(k: string, v: string) {
     try { localStorage.setItem(k, v); } catch { /* private mode: preference just isn't kept */ }
   },
+  /** Removes every key starting with `prefix`. */
+  clear(prefix: string) {
+    try { Object.keys(localStorage).filter((k) => k.startsWith(prefix)).forEach((k) => localStorage.removeItem(k)); } catch { /* nothing kept anyway */ }
+  },
 };
 
 /** Full-screen panels sit on a stack tied to history, so the phone's back button closes them. */
