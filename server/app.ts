@@ -1,14 +1,14 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { gzipSync } from 'node:zlib';
+import { gunzipSync, gzipSync } from 'node:zlib';
 import { DatabaseSync } from 'node:sqlite';
 import { Hono, type Context } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { compress } from 'hono/compress';
 import { streamSSE, type SSEStreamingApi } from 'hono/streaming';
 import { getConnInfo } from '@hono/node-server/conninfo';
-import { BANK_SIZE, EMPTY, H, utcDay, validPixel, W, type WireEvent } from '../shared/pixels.ts';
+import { BANK_SIZE, EMPTY, H, START_PIXELS, utcDay, validPixel, W, type WireEvent } from '../shared/pixels.ts';
 import { Limiter, type Bank, type LimitConfig } from './limits.ts';
 import { iconImage, ogImage } from './png.ts';
 
@@ -29,7 +29,20 @@ const POLL_MAX = 1000;
 
 type Row = { id: number; x: number; y: number; colour: number; device: string; who: string; ts: number };
 const wire = (r: Row): WireEvent => [r.id, r.x, r.y, r.colour, r.who, r.ts];
-export const validName = (n: string) => /^[\p{L}\p{N}_.\- ]{2,20}$/u.test(n) && /[\p{L}\p{N}]/u.test(n);
+// Names are public, so the worst words are refused, after folding case and look-alike digits (5h1t -> shit).
+// Long slurs match anywhere, even split up ("n.i.g.g.e.r"); short words only as a whole word, so Ishita and Dickens pass.
+// shortcut: a short English/Hindi list; add words, or a library, if abuse shows up.
+const ANYWHERE = ['nigger', 'nigga', 'faggot', 'retard', 'tranny', 'wetback', 'fuck', 'bitch', 'whore', 'hitler', 'pussy',
+  'asshole', 'chutiya', 'madarchod', 'bhenchod', 'behenchod', 'bhosdi', 'moderator'];
+const WHOLE = ['shit', 'cunt', 'slut', 'rape', 'rapist', 'nazi', 'porn', 'penis', 'vagina', 'dick', 'cock', 'chink', 'kike',
+  'gandu', 'admin', 'sex', 'cum', 'fag'];
+const LOOK: Record<string, string> = { 0: 'o', 1: 'i', 3: 'e', 4: 'a', 5: 's', 7: 't', 8: 'b' };
+const fold = (n: string) => n.toLowerCase().normalize('NFKD').replace(/[0134578]/g, (c) => LOOK[c]);
+export const blockedName = (n: string) => {
+  const f = fold(n), joined = f.replace(/[^a-z]/g, ''), words = f.split(/[^a-z]+/);
+  return ANYWHERE.some((w) => joined.includes(w)) || words.some((w) => WHOLE.includes(w) || WHOLE.includes(w.replace(/s$/, '')));
+};
+export const validName = (n: string) => /^[\p{L}\p{N}_.\- ]{2,20}$/u.test(n) && /[\p{L}\p{N}]/u.test(n) && !blockedName(n);
 export const whoOf = (device: string) => createHash('sha256').update(device).digest('hex').slice(0, 10);
 
 export function createApp(opts: Options) {
@@ -46,6 +59,7 @@ export function createApp(opts: Options) {
     CREATE TABLE IF NOT EXISTS banks (device TEXT PRIMARY KEY, tokens REAL NOT NULL, at INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS names (device TEXT PRIMARY KEY, name TEXT NOT NULL);
     CREATE UNIQUE INDEX IF NOT EXISTS names_unique ON names(name COLLATE NOCASE);
+    CREATE TABLE IF NOT EXISTS reports (id INTEGER PRIMARY KEY AUTOINCREMENT, x INTEGER NOT NULL, y INTEGER NOT NULL, device TEXT NOT NULL, ts INTEGER NOT NULL);
   `);
   const q = {
     insert: db.prepare('INSERT INTO events (x, y, colour, device, who, ts) VALUES (?, ?, ?, ?, ?, ?)'),
@@ -56,7 +70,6 @@ export function createApp(opts: Options) {
     bankGet: db.prepare('SELECT tokens, at FROM banks WHERE device = ?'),
     bankPut: db.prepare('INSERT OR REPLACE INTO banks (device, tokens, at) VALUES (?, ?, ?)'),
     pixelInfo: db.prepare('SELECT COUNT(*) AS times, MAX(ts) AS ts FROM events WHERE x = ? AND y = ?'),
-    lastPainter: db.prepare('SELECT n.name FROM events e LEFT JOIN names n ON n.device = e.device WHERE e.x = ? AND e.y = ? ORDER BY e.id DESC LIMIT 1'),
     nameGet: db.prepare('SELECT name FROM names WHERE device = ?'),
     nameOwner: db.prepare('SELECT device FROM names WHERE name = ? COLLATE NOCASE'),
     namePut: db.prepare('INSERT OR REPLACE INTO names (device, name) VALUES (?, ?)'),
@@ -64,6 +77,12 @@ export function createApp(opts: Options) {
     leadersAll: db.prepare('SELECT n.name, COUNT(*) AS n FROM events e JOIN names n ON n.device = e.device GROUP BY e.device ORDER BY n DESC LIMIT 10'),
     leadersSince: db.prepare('SELECT n.name, COUNT(*) AS n FROM events e JOIN names n ON n.device = e.device WHERE e.ts >= ? GROUP BY e.device ORDER BY n DESC LIMIT 10'),
     namesAll: db.prepare('SELECT device, name FROM names'),
+    history: db.prepare('SELECT e.colour, e.ts, n.name FROM events e LEFT JOIN names n ON n.device = e.device WHERE e.x = ? AND e.y = ? ORDER BY e.id DESC LIMIT 5'),
+    deviceOf: db.prepare('SELECT device, name FROM names WHERE name = ? COLLATE NOCASE'),
+    profile: db.prepare('SELECT COUNT(*) AS total, COALESCE(SUM(ts >= ?), 0) AS today FROM events WHERE device = ?'),
+    lastOf: db.prepare('SELECT x, y, ts FROM events WHERE device = ? ORDER BY id DESC LIMIT 1'),
+    report: db.prepare('INSERT INTO reports (x, y, device, ts) VALUES (?, ?, ?, ?)'),
+    reports: db.prepare('SELECT MIN(x) AS x, MIN(y) AS y, COUNT(*) AS n, COUNT(DISTINCT device) AS people, MAX(ts) AS last FROM reports GROUP BY x / 20, y / 20 ORDER BY last DESC LIMIT 100'),
   };
 
   // ---- the board, kept in memory and rebuilt from the event log on start ----
@@ -215,6 +234,7 @@ export function createApp(opts: Options) {
     // Only this device's own events, kept where it is still the last painter (no full-board scan).
     const wid = me ? whoIds.get(me) : 0;
     const myPixels = new Set<number>();
+    if (me && !q.bankGet.get(d)) q.bankPut.run(d, START_PIXELS, now()); // the refill clock starts on the first visit
     if (wid) for (const { x, y } of q.myEvents.all(d) as { x: number; y: number }[]) if (owner[y * W + x] === wid) myPixels.add(y * W + x);
     return c.json({
       w: W, h: H, lastId, ...stats(), since: firstTs, myPixels: [...myPixels],
@@ -261,8 +281,9 @@ export function createApp(opts: Options) {
     const x = Number(c.req.query('x')), y = Number(c.req.query('y'));
     if (!validPixel(x, y, 0)) return c.json({ error: 'invalid' }, 400);
     const r = q.pixelInfo.get(x, y) as { times: number; ts: number | null };
-    const by = r.times ? (q.lastPainter.get(x, y) as { name: string | null }).name : null; // null = anonymous
-    return c.json({ x, y, colour: board[y * W + x], times: r.times, ts: r.ts, by });
+    // last five paints, newest first; name null = anonymous
+    const history = r.times ? (q.history.all(x, y) as { colour: number; ts: number; name: string | null }[]) : [];
+    return c.json({ x, y, colour: board[y * W + x], times: r.times, ts: r.ts, by: history[0]?.name ?? null, history });
   });
 
   // Optional public username, shown as "by <name>" in pixel info. Unique ignoring case so nobody can pose as someone else.
@@ -275,6 +296,28 @@ export function createApp(opts: Options) {
     if (owner && owner.device !== b.d) return c.json({ error: 'taken' }, 409);
     q.namePut.run(b.d, name);
     return c.json({ name });
+  });
+
+  // Public profile of a named painter (anonymous painters have none).
+  app.get('/api/profile', (c) => {
+    const row = q.deviceOf.get(c.req.query('name') ?? '') as { device: string; name: string } | undefined;
+    if (!row) return c.json({ error: 'not_found' }, 404);
+    const d = row.device, wid = whoIds.get(whoOf(d));
+    const p = q.profile.get(Date.parse(utcDay(now())), d) as { total: number; today: number };
+    const showing = new Set<number>();
+    if (wid) for (const { x, y } of q.myEvents.all(d) as { x: number; y: number }[]) if (owner[y * W + x] === wid) showing.add(y * W + x);
+    return c.json({ name: row.name, total: p.total, today: p.today, showing: showing.size, last: q.lastOf.get(d) ?? null });
+  });
+
+  // Anyone can flag a pixel for the admin to look at; one report per device every 10 seconds.
+  const reported = new Map<string, number>();
+  app.post('/api/report', async (c) => {
+    const b = await c.req.json().catch(() => null);
+    if (!b || typeof b.d !== 'string' || !UUID.test(b.d) || !validPixel(b.x, b.y, 0)) return c.json({ error: 'invalid' }, 400);
+    if (now() - (reported.get(b.d) ?? -Infinity) < 10_000) return c.json({ error: 'slow_down' }, 429);
+    reported.set(b.d, now());
+    q.report.run(b.x, b.y, b.d, now());
+    return c.json({ ok: true });
   });
 
   app.post('/api/hello', async (c) => {
@@ -372,6 +415,49 @@ export function createApp(opts: Options) {
     if (!b || typeof b.name !== 'string') return c.json({ error: 'name required' }, 400);
     return c.json({ ok: true, cleared: db.prepare('DELETE FROM names WHERE name = ? COLLATE NOCASE').run(b.name).changes });
   });
+  // Reports grouped into 20 x 20 areas, newest first.
+  admin.get('/reports', (c) => c.json({ areas: q.reports.all() }));
+  admin.post('/clear-reports', (c) => c.json({ ok: true, cleared: db.prepare('DELETE FROM reports').run().changes }));
+
+  // Body: { file: "backup-YYYY-MM-DD.json.gz" }. Replaces every event and name with that backup.
+  admin.post('/restore', async (c) => {
+    const b = await c.req.json().catch(() => null);
+    const st = opts.storage;
+    if (!st) return c.json({ error: 'file storage is not configured' }, 503);
+    if (!b || typeof b.file !== 'string' || !/^backup-[\w.-]+\.json\.gz$/.test(b.file)) return c.json({ error: 'file like backup-2026-11-24.json.gz required' }, 400);
+    const base = `${st.url}/apps/${st.app}/files`, auth = { authorization: `Bearer ${st.token}` };
+    const list = (await fetch(base, { headers: auth }).then((r) => r.json()).catch(() => ({}))) as { files?: { id: string; filename: string; url?: string }[] };
+    const f = list.files?.find((x) => x.filename === b.file);
+    if (!f) return c.json({ error: 'no such backup', files: (list.files ?? []).map((x) => x.filename) }, 404);
+    const url = f.url ?? `${base}/${f.id}`;
+    const res = await fetch(url, { headers: url.startsWith(st.url) ? auth : {} }); // the token only ever goes to the storage host
+    if (!res.ok) return c.json({ error: `download failed: ${res.status}` }, 502);
+    let data: { events: { id: number; x: number; y: number; colour: number; device: string; ts: number }[]; names: { device: string; name: string }[] };
+    try {
+      const raw = Buffer.from(await res.arrayBuffer());
+      data = JSON.parse((raw[0] === 0x1f ? gunzipSync(raw) : raw).toString('utf8')); // the host may already have unzipped it
+      if (!Array.isArray(data.events) || !Array.isArray(data.names)) throw new Error('shape');
+    } catch {
+      return c.json({ error: 'not a PixelWorld backup' }, 400);
+    }
+    const ins = db.prepare('INSERT INTO events (id, x, y, colour, device, who, ts) VALUES (?, ?, ?, ?, ?, ?, ?)');
+    db.exec('BEGIN');
+    try {
+      db.exec('DELETE FROM events; DELETE FROM names;');
+      for (const e of data.events) {
+        if (!validPixel(e.x, e.y, e.colour) || typeof e.device !== 'string') throw new Error(`bad event ${e.id}`);
+        ins.run(e.id, e.x, e.y, e.colour, e.device, whoOf(e.device), e.ts);
+      }
+      for (const n of data.names) q.namePut.run(n.device, n.name);
+      db.exec('COMMIT');
+    } catch (e) {
+      db.exec('ROLLBACK'); // nothing changes if any row is bad
+      return c.json({ error: (e as Error).message }, 400);
+    }
+    afterAdminChange();
+    return c.json({ ok: true, events: data.events.length, names: data.names.length });
+  });
+
   admin.get('/export', (c) => {
     c.header('content-disposition', 'attachment; filename="pixelworld.json"');
     return c.json({ w: W, h: H, events: q.exportAll.all() });

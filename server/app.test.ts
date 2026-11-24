@@ -1,9 +1,9 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { gunzipSync, inflateSync } from 'node:zlib';
+import { gunzipSync, gzipSync, inflateSync } from 'node:zlib';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BANK_SIZE, EMPTY, H, REGEN_MS, W } from '../shared/pixels.ts';
+import { BANK_SIZE, EMPTY, H, REGEN_MS, START_PIXELS, W } from '../shared/pixels.ts';
 import { createApp } from './app.ts';
 
 const D1 = '11111111-1111-4111-8111-111111111111';
@@ -35,7 +35,7 @@ describe('server', () => {
     expect(ok.status).toBe(200);
     const body = await ok.json();
     expect(body.mine).toBe(1);
-    expect(body.tokens).toBe(BANK_SIZE - 1);
+    expect(body.tokens).toBe(START_PIXELS - 1);
     expect(body.evs[0].slice(1, 4)).toEqual([3, 7, 5]);
 
     expect((await place(app, { d: D2, x: W, y: 0, colour: 0 })).status).toBe(400);
@@ -48,7 +48,7 @@ describe('server', () => {
     expect(board.length).toBe(W * H);
     expect(board[7 * W + 3]).toBe(9);
     expect(board[0]).toBe(EMPTY);
-    expect(state).toMatchObject({ pixels: 2, people: 1, mine: 2, myPixels: [7 * W + 3], tokens: BANK_SIZE - 2 });
+    expect(state).toMatchObject({ pixels: 2, people: 1, mine: 2, myPixels: [7 * W + 3], tokens: START_PIXELS - 2 });
 
     const delta = await (await app.request(`/api/events?since=${body.evs[0][0]}`)).json();
     expect(delta.e.length).toBe(1);
@@ -68,9 +68,13 @@ describe('server', () => {
     expect(s.pixels).toBe(1);
   });
 
-  it('spends the 64-pixel bank, refills it over time, and keeps it across a restart', async () => {
+  it('spends a new device\'s 16 pixels, refills over time, and keeps the bank across a restart', async () => {
     const app = boot();
-    for (let i = 0; i < BANK_SIZE; i++) expect((await place(app, { d: D2, x: i, y: 0, colour: 1 })).status).toBe(200);
+    expect((await (await app.request(`/api/state?d=${D2}`)).json()).tokens).toBe(START_PIXELS);
+    t += REGEN_MS; // the first visit starts the refill clock
+    expect((await (await app.request(`/api/state?d=${D2}`)).json()).tokens).toBe(START_PIXELS + 1);
+    expect((await place(app, { d: D2, x: 100, y: 0, colour: 1 })).status).toBe(200); // spend the one it earned
+    for (let i = 0; i < START_PIXELS; i++) expect((await place(app, { d: D2, x: i, y: 0, colour: 1 })).status).toBe(200);
     const empty = await place(app, { d: D2, x: 0, y: 1, colour: 1 });
     expect(empty.status).toBe(429);
     expect(await empty.json()).toMatchObject({ error: 'empty', retryMs: REGEN_MS });
@@ -84,9 +88,9 @@ describe('server', () => {
   it('places a whole batch at once, but never more than the bank holds', async () => {
     const app = boot();
     const batch = (n: number, y: number) => Array.from({ length: n }, (_, i) => [i, y, 4]);
-    const r1 = await (await post(app, { d: D1, pixels: batch(60, 0) })).json();
-    expect(r1.evs.length).toBe(60);
-    expect(r1.tokens).toBe(BANK_SIZE - 60);
+    const r1 = await (await post(app, { d: D1, pixels: batch(START_PIXELS - 4, 0) })).json();
+    expect(r1.evs.length).toBe(START_PIXELS - 4);
+    expect(r1.tokens).toBe(4);
     const r2 = await (await post(app, { d: D1, pixels: batch(10, 1) })).json();
     expect(r2.evs.length).toBe(4); // only 4 left in the bank
     expect((await post(app, { d: D1, pixels: batch(1, 2) })).status).toBe(429);
@@ -94,7 +98,9 @@ describe('server', () => {
     expect((await post(app, { d: D2, pixels: [] })).status).toBe(400);
     expect((await post(app, { d: D2, pixels: [[0, 0, 1], [W, 0, 1]] })).status).toBe(400); // one bad pixel rejects the batch
     const s = await (await app.request('/api/state')).json();
-    expect(s.pixels).toBe(64);
+    expect(s.pixels).toBe(START_PIXELS);
+    t += REGEN_MS * 1000; // a bank that has been used refills all the way to 64
+    expect((await (await post(app, { d: D1, pixels: batch(BANK_SIZE, 5) })).json()).evs.length).toBe(BANK_SIZE);
   });
 
   it('reports how busy a pixel has been', async () => {
@@ -103,6 +109,9 @@ describe('server', () => {
     await place(app, { d: D2, x: 9, y: 9, colour: 2 });
     const info = await (await app.request('/api/pixel?x=9&y=9')).json();
     expect(info).toMatchObject({ x: 9, y: 9, colour: 2, times: 2, ts: t });
+    expect(info.history.map((h: { colour: number }) => h.colour)).toEqual([2, 1]); // newest first
+    for (let i = 0; i < 6; i++) await place(app, { d: D1, x: 9, y: 9, colour: 200 + i }); // the wider palette works too
+    expect((await (await app.request('/api/pixel?x=9&y=9')).json()).history.length).toBe(5);
     expect(await (await app.request('/api/pixel?x=0&y=0')).json()).toMatchObject({ times: 0, ts: null, colour: EMPTY });
     expect((await app.request(`/api/pixel?x=${W}&y=0`)).status).toBe(400);
   });
@@ -132,6 +141,8 @@ describe('server', () => {
     expect((await setName(D2, '<script>')).status).toBe(400);
     expect((await setName(D2, '...')).status).toBe(400); // needs a letter or digit
     expect((await setName(D2, 42)).status).toBe(400);
+    for (const bad of ['fuck you', 'Sh1t head', 'n.i.g.g.e.r', 'B1TCH', 'Admin', 'big dicks', 'xXfuckerXx']) expect((await setName(D2, bad)).status).toBe(400);
+    for (const ok of ['Ishita', 'Dickens', 'Grape Juice', 'Scunthorpe', 'Hancock', 'Essex']) expect((await setName('33333333-3333-4333-8333-333333333333', ok)).status).toBe(200);
     await place(app, { d: D1, x: 4, y: 4, colour: 1 });
     expect((await (await app.request('/api/pixel?x=4&y=4')).json()).by).toBe('Ada Lovelace');
     await place(app, { d: D2, x: 4, y: 4, colour: 2 });
@@ -212,6 +223,58 @@ describe('server', () => {
       expect(await r.text()).toContain('Backed up 1 events');
       expect(calls[0]).toMatchObject({ method: 'PUT', url: expect.stringMatching(/^https:\/\/store\.test\/apps\/pw\/files\/backup-\d{4}-\d{2}-\d{2}\.json\.gz$/) });
       expect(calls.filter((c) => c.method === 'DELETE').map((c) => c.url)).toEqual(['https://store.test/apps/pw/files/f14', 'https://store.test/apps/pw/files/f15']);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('shows a named painter\'s profile', async () => {
+    const app = boot();
+    await app.request('/api/name', { method: 'POST', body: JSON.stringify({ d: D1, name: 'Ada' }), headers: { 'content-type': 'application/json' } });
+    await post(app, { d: D1, pixels: [[1, 1, 1], [2, 1, 1], [3, 1, 1]] });
+    await place(app, { d: D2, x: 1, y: 1, colour: 2 }); // covers one of Ada's
+    const p = await (await app.request('/api/profile?name=ada')).json();
+    expect(p).toMatchObject({ name: 'Ada', total: 3, today: 3, showing: 2, last: { x: 3, y: 1, ts: t } });
+    expect((await app.request('/api/profile?name=nobody')).status).toBe(404);
+  });
+
+  it('takes pixel reports and shows them to the admin', async () => {
+    const app = boot();
+    const report = (d: string, x: number, y: number) =>
+      app.request('/api/report', { method: 'POST', body: JSON.stringify({ d, x, y }), headers: { 'content-type': 'application/json' } });
+    expect((await report(D1, 30, 30)).status).toBe(200);
+    expect((await report(D1, 31, 30)).status).toBe(429); // one every 10 s per device
+    expect((await report(D2, 35, 32)).status).toBe(200);
+    expect((await report(D2, W, 0)).status).toBe(400);
+    const auth = { authorization: 'Bearer s3cret' };
+    expect((await app.request('/api/admin/reports')).status).toBe(404);
+    const r = await (await app.request('/api/admin/reports', { headers: auth })).json();
+    expect(r.areas).toEqual([{ x: 30, y: 30, n: 2, people: 2, last: t }]); // same 20 x 20 area
+  });
+
+  it('restores everything from a backup file', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'pixelworld-'));
+    const storage = { url: 'https://store.test', token: 'tok', app: 'pw' };
+    inst = createApp({ dataDir: dir, adminSecret: 's3cret', limits: { ipPerMin: 1000, ipDaily: 100_000 }, now: () => t, storage });
+    const app = inst.app;
+    await place(app, { d: D2, x: 7, y: 7, colour: 3 }); // made after the backup: goes away
+    const backup = gzipSync(JSON.stringify({ events: [{ id: 1, x: 4, y: 4, colour: 9, device: D1, ts: t }], names: [{ device: D1, name: 'Ada' }] }));
+    const seen: { url: string; auth?: string }[] = [];
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit = {}) => {
+      seen.push({ url, auth: (init.headers as Record<string, string> | undefined)?.authorization });
+      if (url.endsWith('/files')) return Response.json({ files: [{ id: 'f1', filename: 'backup-2026-11-23.json.gz', url: 'https://store.test/apps/pw/files/f1/download' }] });
+      return new Response(backup);
+    });
+    try {
+      const auth = { authorization: 'Bearer s3cret', 'content-type': 'application/json' };
+      const restore = (file: string) => app.request('/api/admin/restore', { method: 'POST', headers: auth, body: JSON.stringify({ file }) });
+      expect((await restore('../etc/passwd')).status).toBe(400);
+      expect((await restore('backup-1999-01-01.json.gz')).status).toBe(404);
+      expect(await (await restore('backup-2026-11-23.json.gz')).json()).toMatchObject({ ok: true, events: 1, names: 1 });
+      const board = await boardOf(app);
+      expect([board[4 * W + 4], board[7 * W + 7]]).toEqual([9, EMPTY]);
+      expect((await (await app.request(`/api/state?d=${D1}`)).json()).name).toBe('Ada');
+      expect(seen.every((s) => s.auth === 'Bearer tok')).toBe(true);
     } finally {
       vi.unstubAllGlobals();
     }

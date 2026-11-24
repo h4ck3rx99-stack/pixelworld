@@ -1,4 +1,4 @@
-import { BANK_SIZE, REGEN_MS, utcDay } from '../shared/pixels.ts';
+import { BANK_SIZE, REGEN_MS, START_PIXELS, utcDay } from '../shared/pixels.ts';
 
 export type LimitConfig = { ipPerMin: number; ipDaily: number };
 export type Verdict = { ok: true; tokens: number; count: number } | { ok: false; reason: 'empty' | 'rate' | 'daily'; retryMs: number; tokens: number };
@@ -11,9 +11,9 @@ const memoryStore = (): BankStore => {
   return { get: (d) => m.get(d), set: (d, b) => void m.set(d, b) };
 };
 
-/** Tokens a bank holds at `now`: starts full, refills one per REGEN_MS, never above BANK_SIZE. */
+/** Tokens a bank holds at `now`: a new device starts with START_PIXELS, refills one per REGEN_MS, never above BANK_SIZE. */
 export const tokensAt = (b: Bank | undefined, now: number) =>
-  b ? Math.min(BANK_SIZE, b.tokens + Math.max(0, now - b.at) / REGEN_MS) : BANK_SIZE;
+  b ? Math.min(BANK_SIZE, b.tokens + Math.max(0, now - b.at) / REGEN_MS) : START_PIXELS;
 
 /** Per-device pixel bank plus per-IP rate limit and daily cap (those two are in memory). */
 export class Limiter {

@@ -1,7 +1,6 @@
 import { crc32, deflateSync } from 'node:zlib';
-import { EMPTY, H as BH, PALETTE, PAPER, W as BW } from '../shared/pixels.ts';
+import { EMPTY, H as BH, PALETTE, PAPER, rgbOf as hex, W as BW } from '../shared/pixels.ts';
 
-const hex = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
 const BG = hex('#0E1020');
 const COLOUR = [...PALETTE.map(hex), hex(PAPER)];
 

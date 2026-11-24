@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { H, PALETTE, PALETTE_NAMES, utcDay, validPixel, W } from './pixels.ts';
+import { BASE, colourName, EMPTY, H, nearest, PALETTE, utcDay, validPixel, W } from './pixels.ts';
 
 describe('pixels', () => {
   it('validates coordinates and colours', () => {
@@ -17,9 +17,20 @@ describe('pixels', () => {
     expect(W / H).toBeCloseTo(16 / 9);
   });
 
-  it('has a name for every colour', () => {
-    expect(PALETTE_NAMES.length).toBe(PALETTE.length);
-    expect(PALETTE.length).toBeLessThan(255); // 255 marks an empty pixel
+  it('fits 254 distinct colours in a byte, keeping the original 16 first', () => {
+    expect(PALETTE.length).toBe(254);
+    expect(PALETTE.length).toBeLessThan(EMPTY); // 255 marks an empty pixel
+    expect(PALETTE.slice(0, 16)).toEqual(BASE);
+    expect(PALETTE.every((h) => /^#[0-9A-F]{6}$/.test(h))).toBe(true);
+    expect(colourName(5)).toBe('Red');
+    expect(colourName(100)).toBe(PALETTE[100]);
+  });
+
+  it('snaps any colour to the nearest palette entry', () => {
+    expect(PALETTE[nearest(255, 255, 255)]).toBe('#FFFFFF');
+    expect(PALETTE[nearest(0, 0, 0)]).toBe('#000000');
+    expect(nearest(232, 50, 46)).toBe(5); // exact base red
+    expect(PALETTE[nearest(250, 5, 3)]).toBe('#FF0000');
   });
 
   it('daily caps roll over at 00:00 UTC', () => {

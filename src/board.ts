@@ -1,6 +1,6 @@
-import { EMPTY, H, PALETTE, PAPER, W } from '../shared/pixels.ts';
+import { EMPTY, H, PALETTE, PAPER, rgbOf as toRgb, W } from '../shared/pixels.ts';
 
-const RGB = [...PALETTE, PAPER].map((h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)));
+const RGB = [...PALETTE, PAPER].map(toRgb);
 const rgbOf = (c: number) => RGB[c === EMPTY ? PALETTE.length : c];
 export const BG = '#0E1020';
 

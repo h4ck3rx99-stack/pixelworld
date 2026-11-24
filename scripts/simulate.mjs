@@ -25,7 +25,7 @@ const HOST = '127.0.0.1';
 const BASE = `http://${HOST}:${PORT}`;
 if (new URL(BASE).hostname !== '127.0.0.1') throw new Error('simulator only runs against its own local server');
 
-const W = 2400, H = 1350, COLOURS = 16; // must mirror shared/pixels.ts
+const W = 2400, H = 1350, COLOURS = 254; // must mirror PALETTE.length in shared/pixels.ts
 const rnd = (n) => Math.floor(Math.random() * n);
 // Each fake person "draws": a short random walk in one colour, so the canvas looks used rather than noisy.
 const walker = () => {

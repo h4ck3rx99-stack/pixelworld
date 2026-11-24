@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { BANK_SIZE, REGEN_MS } from '../shared/pixels.ts';
+import { BANK_SIZE, REGEN_MS, START_PIXELS } from '../shared/pixels.ts';
 import { Limiter } from './limits.ts';
 
 const cfg = { ipPerMin: 1000, ipDaily: 100_000 };
 const T = Date.UTC(2026, 10, 23, 10, 0);
 
 describe('pixel bank', () => {
-  it('starts full, empties, then refills one pixel per REGEN_MS', () => {
+  it('starts with START_PIXELS, empties, then refills one pixel per REGEN_MS', () => {
     const l = new Limiter(cfg);
-    for (let i = 0; i < BANK_SIZE; i++) expect(l.take('a', 'ip' + (i % 9), T).ok).toBe(true);
+    for (let i = 0; i < START_PIXELS; i++) expect(l.take('a', 'ip' + (i % 9), T).ok).toBe(true);
     const v = l.take('a', 'ip', T);
     expect(v).toMatchObject({ ok: false, reason: 'empty', retryMs: REGEN_MS });
     expect(l.take('b', 'ip', T).ok).toBe(true); // other devices have their own bank
@@ -27,7 +27,7 @@ describe('pixel bank', () => {
     const l = new Limiter({ ...cfg, ipPerMin: 1 });
     l.take('a', 'ip', T);
     expect(l.take('a', 'ip', T)).toMatchObject({ ok: false, reason: 'rate' });
-    expect(l.tokens('a', T)).toBe(BANK_SIZE - 1);
+    expect(l.tokens('a', T)).toBe(START_PIXELS - 1);
   });
 });
 
@@ -35,12 +35,12 @@ describe('batches', () => {
   it('spends a whole batch at once', () => {
     const l = new Limiter(cfg);
     expect(l.take('a', 'ip', T, 10)).toMatchObject({ ok: true, count: 10 });
-    expect(l.tokens('a', T)).toBe(BANK_SIZE - 10);
+    expect(l.tokens('a', T)).toBe(START_PIXELS - 10);
   });
 
   it('grants only what the bank holds and drops the rest', () => {
     const l = new Limiter(cfg);
-    l.take('a', 'ip', T, BANK_SIZE - 3);
+    l.take('a', 'ip', T, START_PIXELS - 3);
     expect(l.take('a', 'ip', T, 10)).toMatchObject({ ok: true, count: 3 });
     expect(l.take('a', 'ip', T, 1)).toMatchObject({ ok: false, reason: 'empty' });
   });
@@ -48,7 +48,7 @@ describe('batches', () => {
   it('never grants past the per-IP minute limit', () => {
     const l = new Limiter({ ...cfg, ipPerMin: 5 });
     expect(l.take('a', 'ip', T, 20)).toMatchObject({ ok: true, count: 5 });
-    expect(l.tokens('a', T)).toBe(BANK_SIZE - 5); // ungranted pixels stay in the bank
+    expect(l.tokens('a', T)).toBe(START_PIXELS - 5); // ungranted pixels stay in the bank
   });
 });
 

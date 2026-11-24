@@ -1,6 +1,6 @@
 import '@fontsource-variable/inter';
 import './style.css';
-import { BANK_SIZE, EMPTY, H, PALETTE, PALETTE_NAMES, REGEN_MS, W, type WireEvent } from '../shared/pixels.ts';
+import { BANK_SIZE, BASE, colourName, EMPTY, H, nearest, PALETTE, REGEN_MS, rgbOf, START_PIXELS, W, type WireEvent } from '../shared/pixels.ts';
 import { chime, setSound, soundOn } from './audio.ts';
 import { Board } from './board.ts';
 import { deviceId, getJSON, Live, myWho, postJSON, type State } from './net.ts';
@@ -26,6 +26,7 @@ let colour = (() => {
 
 // ---------- layout & view (pinch-zoom / pan) ----------
 let zoom = 1, panX = 0, panY = 0, base = { cx: 0, cy: 0, s: 1 };
+let area = { right: 0, top: 0, bottom: 0 }; // the part of the screen the canvas shows in
 const maxZoom = () => Math.max(1, 44 / base.s); // up to ~44 css px per pixel
 function layout() {
   const w = innerWidth, h = innerHeight;
@@ -37,6 +38,7 @@ function layout() {
   const availW = Math.max(120, right - 16), availH = Math.max(120, bottom - top - 12);
   // fit the whole canvas, however big
   base = { cx: right / 2, cy: top + (bottom - top) / 2, s: Math.max(0.05, Math.min(availW / W, availH / H)) };
+  area = { right, top, bottom };
   zoom = Math.min(zoom, maxZoom());
   board.resize(w, h, view());
 }
@@ -72,8 +74,27 @@ let moved = false;
 let stroke: number | null = null; // last pixel of the current Draw stroke
 let lastTap = { t: 0, x: 0, y: 0 };
 const cv = board.cv;
+// ---------- minimap: shown while zoomed in; tap or drag it to jump ----------
+let miniDrag = -1;
+const miniOn = () => zoom > 1.3;
+const miniRect = () => {
+  const w = Math.min(170, area.right * 0.34);
+  return { x: area.right - w - 12, y: area.top + 8, w, h: (w * H) / W };
+};
+const inMini = (x: number, y: number) => {
+  const m = miniRect();
+  return miniOn() && x >= m.x - 4 && x <= m.x + m.w + 4 && y >= m.y - 4 && y <= m.y + m.h + 4;
+};
+function miniJump(e: PointerEvent) {
+  const m = miniRect(), s = base.s * zoom;
+  panX = -(((e.clientX - m.x) / m.w) * W - W / 2) * s;
+  panY = -(((e.clientY - m.y) / m.h) * H - H / 2) * s;
+  clampPan();
+}
+
 cv.addEventListener('pointerdown', (e) => {
   cv.setPointerCapture(e.pointerId);
+  if (!pts.size && inMini(e.clientX, e.clientY)) return (miniDrag = e.pointerId), miniJump(e);
   pts.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY });
   if (pts.size === 1) {
     moved = false;
@@ -92,6 +113,7 @@ cv.addEventListener('pointerdown', (e) => {
   }
 });
 cv.addEventListener('pointermove', (e) => {
+  if (e.pointerId === miniDrag) return miniJump(e);
   const p = pts.get(e.pointerId);
   if (!p) return;
   const dx = e.clientX - p.x, dy = e.clientY - p.y;
@@ -114,6 +136,7 @@ cv.addEventListener('pointermove', (e) => {
   }
 });
 const up = (e: PointerEvent) => {
+  if (e.pointerId === miniDrag) return void (miniDrag = -1);
   const p = pts.get(e.pointerId);
   pts.delete(e.pointerId);
   if (pts.size < 2) pinch = null;
@@ -164,11 +187,11 @@ function tapPixel(i: number) {
   if (i < 0) return;
   showInfo(i);
   if (picking) {
-    const c = drafts.get(i) ?? board.colours[i];
+    const c = drafts.get(i) ?? tplAt(i) ?? board.colours[i]; // the guide image wins, so tracing is quick
     setPicking(false);
     if (c === EMPTY) return toast('That pixel is still blank.');
     pick(c);
-    return toast(`Picked ${PALETTE_NAMES[c]}`);
+    return toast(`Picked ${colourName(c)}`);
   }
   if (drafts.get(i) === colour) drafts.delete(i);
   else if (drafts.has(i) || pixelsLeft() > 0) drafts.set(i, colour);
@@ -185,7 +208,7 @@ function clearDrafts() {
 
 // ---------- the pixel bank and Place ----------
 const placeBtn = $<HTMLButtonElement>('#place');
-let bank = { tokens: BANK_SIZE, at: Date.now() };
+let bank = { tokens: START_PIXELS, at: Date.now() }; // until the server says otherwise
 let blockedUntil = 0; // set when the network as a whole is rate limited
 let inflight = 0;
 const tokensNow = () => Math.min(BANK_SIZE, bank.tokens + (Date.now() - bank.at) / REGEN_MS);
@@ -295,7 +318,7 @@ async function showInfo(i: number) {
     const r = await getJSON<{ times: number; ts: number | null; by: string | null }>(`/api/pixel?x=${x}&y=${y}`);
     if (seq !== infoSeq) return;
     el.textContent = r.times
-      ? `${x}, ${y} · by ${myPixels.has(i) ? 'you' : r.by ?? 'anonymous'} · painted ${r.times}× · last ${ago(r.ts!)}`
+      ? `${x}, ${y} · by ${myPixels.has(i) ? 'you' : r.by ?? 'anonymous'} · painted ${r.times}× · last ${ago(r.ts!)} ›`
       : `${x}, ${y} · never painted`;
   } catch { /* coordinates alone are fine */ }
 }
@@ -352,6 +375,13 @@ async function hello() {
 board.overlay = (g, now) => {
   const d = board.dpr;
   let more = false;
+  if (tpl?.on) {
+    const [x, y, w] = board.rectOf(tpl.y * W + tpl.x);
+    g.globalAlpha = tpl.alpha;
+    g.imageSmoothingEnabled = false;
+    g.drawImage(tpl.cv, x, y, tpl.cv.width * w, tpl.cv.height * w);
+    g.globalAlpha = 1;
+  }
   for (const [i, c] of drafts) {
     const [x, y, w] = board.rectOf(i);
     const r = Math.max(w, 2 * d);
@@ -388,6 +418,18 @@ board.overlay = (g, now) => {
     }
     more = true;
   }
+  if (miniOn()) {
+    const m = miniRect(), v = view();
+    g.fillStyle = 'rgba(14,16,32,0.88)';
+    g.fillRect((m.x - 4) * d, (m.y - 4) * d, (m.w + 8) * d, (m.h + 8) * d);
+    g.imageSmoothingEnabled = true; // a shrunk canvas reads better smoothed
+    g.drawImage(board.px, m.x * d, m.y * d, m.w * d, m.h * d);
+    const bx = (sx: number) => Math.max(0, Math.min(W, (sx - v.cx) / v.s + W / 2)), by = (sy: number) => Math.max(0, Math.min(H, (sy - v.cy) / v.s + H / 2));
+    const x0 = bx(0), x1 = bx(area.right), y0 = by(area.top), y1 = by(area.bottom);
+    g.strokeStyle = '#FFD93B';
+    g.lineWidth = 1.5 * d;
+    g.strokeRect((m.x + (x0 / W) * m.w) * d, (m.y + (y0 / H) * m.h) * d, Math.max(2, ((x1 - x0) / W) * m.w) * d, Math.max(2, ((y1 - y0) / H) * m.h) * d);
+  }
   return more;
 };
 
@@ -422,25 +464,134 @@ function dismissHint() {
 if (store.get('pw.hint') !== '2') $('#hint').hidden = false;
 
 // ---------- palette & tools ----------
-const swatches = PALETTE.map((hex, i) => {
+const swatch = (label: string, onclick: () => void) => {
   const b = document.createElement('button');
+  b.type = 'button';
   b.className = 'swatch';
   b.setAttribute('role', 'radio');
-  b.setAttribute('aria-label', PALETTE_NAMES[i]);
-  b.title = PALETTE_NAMES[i];
-  b.style.setProperty('--c', hex);
+  b.setAttribute('aria-label', label);
+  b.title = label;
   b.append(document.createElement('i'));
-  b.onclick = () => pick(i);
+  b.onclick = onclick;
   $('#colours').append(b);
   return b;
+};
+const swatches = BASE.map((hex, i) => {
+  const b = swatch(colourName(i), () => pick(i));
+  b.style.setProperty('--c', hex);
+  return b;
 });
+// One slot for the latest colour from the big picker, then the button that opens it.
+const customSwatch = swatch('Your last custom colour', () => pick(Number(customSwatch.dataset.c)));
+customSwatch.hidden = true;
+const moreBtn = swatch('More colours', openColours);
+moreBtn.classList.add('more');
+moreBtn.removeAttribute('role');
+
+let recent: number[] = (() => {
+  try { return (JSON.parse(store.get('pw.recent') ?? '[]') as number[]).filter((c) => Number.isInteger(c) && c >= 0 && c < PALETTE.length); } catch { return []; }
+})();
 function pick(c: number) {
   colour = c;
   store.set('pw.colour', String(c));
   swatches.forEach((b, i) => b.setAttribute('aria-checked', String(i === c)));
+  if (c >= BASE.length) {
+    customSwatch.hidden = false;
+    customSwatch.dataset.c = String(c);
+    customSwatch.style.setProperty('--c', PALETTE[c]);
+    customSwatch.title = customSwatch.ariaLabel = colourName(c);
+    recent = [c, ...recent.filter((x) => x !== c)].slice(0, 18);
+    store.set('pw.recent', JSON.stringify(recent));
+  }
+  customSwatch.setAttribute('aria-checked', String(c >= BASE.length));
   placeBtn.style.setProperty('--c', PALETTE[c]);
+  if (!$('#colour-panel').hidden) showChosen();
   board.kick();
 }
+if (recent[0] !== undefined && colour < BASE.length) {
+  customSwatch.hidden = false;
+  customSwatch.dataset.c = String(recent[0]);
+  customSwatch.style.setProperty('--c', PALETTE[recent[0]]);
+}
+
+// ---------- the big colour picker: a wheel snapped to the palette, recents, and every colour ----------
+const PAL_RGB = PALETTE.map(rgbOf);
+const snapCache = new Map<number, number>();
+const snap = (r: number, g: number, b: number) => {
+  const k = ((r >> 2) << 12) | ((g >> 2) << 6) | (b >> 2);
+  let c = snapCache.get(k);
+  if (c === undefined) snapCache.set(k, (c = nearest(r, g, b)));
+  return c;
+};
+function hsl(h: number, s: number, l: number) {
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12, a = s * Math.min(l, 1 - l);
+    return Math.round(255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))));
+  };
+  return [f(0), f(8), f(4)] as const;
+}
+const wheel = $<HTMLCanvasElement>('#wheel');
+const light = $<HTMLInputElement>('#light');
+const wheelColour = (x: number, y: number) => {
+  const n = wheel.width, dx = x - n / 2, dy = y - n / 2, r = Math.hypot(dx, dy) / (n / 2);
+  if (r > 1) return -1;
+  return snap(...hsl(((Math.atan2(dy, dx) * 180) / Math.PI + 360) % 360, r, Number(light.value) / 100));
+};
+function drawWheel() {
+  const n = wheel.width, g = wheel.getContext('2d')!, img = g.createImageData(n, n);
+  for (let y = 0; y < n; y++)
+    for (let x = 0; x < n; x++) {
+      const c = wheelColour(x + 0.5, y + 0.5);
+      if (c < 0) continue;
+      img.data.set([...PAL_RGB[c], 255], (y * n + x) * 4);
+    }
+  g.putImageData(img, 0, 0);
+}
+function showChosen() {
+  $('#chosen-chip').style.background = PALETTE[colour];
+  $('#chosen-name').textContent = colourName(colour);
+  const mark = (box: string) => $(box).querySelectorAll<HTMLElement>('button').forEach((b) => b.setAttribute('aria-pressed', String(Number(b.dataset.c) === colour)));
+  fillMinis('#recent', recent);
+  mark('#recent');
+  mark('#all-colours');
+}
+function fillMinis(box: string, list: number[]) {
+  $(box).replaceChildren(...list.map((c) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.dataset.c = String(c);
+    b.style.background = PALETTE[c];
+    b.title = b.ariaLabel = colourName(c);
+    b.onclick = () => pick(c);
+    return b;
+  }));
+  if (!list.length) $(box).innerHTML = '<p class="small">Colours you choose here show up for next time.</p>';
+}
+let allFilled = false;
+function openColours() {
+  if (!allFilled) {
+    allFilled = true;
+    // all colours sorted greys first, then by hue and lightness, so the grid reads like a rainbow
+    const key = (c: number) => {
+      const [r, g, b] = PAL_RGB[c], mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2;
+      if (mx - mn < 8) return l;
+      const h = mx === r ? ((g - b) / (mx - mn) + 6) % 6 : mx === g ? (b - r) / (mx - mn) + 2 : (r - g) / (mx - mn) + 4;
+      return 1000 + Math.round(h * 4) * 1000 + l;
+    };
+    fillMinis('#all-colours', PALETTE.map((_, i) => i).filter((i, _, a) => a.findIndex((j) => PALETTE[j] === PALETTE[i]) === i).sort((a, b) => key(a) - key(b)));
+    drawWheel();
+  }
+  openPanel($('#colour-panel'));
+  showChosen();
+}
+light.addEventListener('input', drawWheel);
+const wheelPick = (e: PointerEvent) => {
+  const r = wheel.getBoundingClientRect();
+  const c = wheelColour(((e.clientX - r.left) / r.width) * wheel.width, ((e.clientY - r.top) / r.height) * wheel.height);
+  if (c >= 0 && c !== colour) pick(c);
+};
+wheel.addEventListener('pointerdown', (e) => (wheel.setPointerCapture(e.pointerId), wheelPick(e)));
+wheel.addEventListener('pointermove', (e) => e.buttons && wheelPick(e));
 function setMode(m: 'move' | 'draw') {
   mode = m;
   store.set('pw.mode', m);
@@ -481,6 +632,7 @@ $('#name-btn').addEventListener('click', () => openName());
 // ---------- leaderboard ----------
 type Leader = { name: string; n: number };
 $('#leaders-btn').addEventListener('click', async () => {
+  showProfile(false);
   openPanel($('#leaders'));
   const fill = (id: string, rows: Leader[]) => {
     const ol = $(id);
@@ -492,6 +644,11 @@ $('#leaders-btn').addEventListener('click', async () => {
       n.textContent = fmt(r.n);
       li.append(name, n);
       li.classList.toggle('me', r.name === myName);
+      li.tabIndex = 0;
+      li.setAttribute('role', 'button');
+      const open = (e: Event) => (!(e instanceof KeyboardEvent) || e.key === 'Enter') && openProfile(r.name);
+      li.onclick = open;
+      li.onkeydown = open;
       return li;
     }));
     if (!rows.length) ol.innerHTML = '<li class="empty">Nobody with a name yet. Set yours and place a few pixels!</li>';
@@ -506,9 +663,209 @@ $('#leaders-btn').addEventListener('click', async () => {
   }
 });
 
+const showProfile = (on: boolean) => {
+  $('#profile').hidden = !on;
+  $('#leaders .boards').hidden = on;
+  $('#leaders-note').hidden = on;
+};
+let profileLast: { x: number; y: number } | null = null;
+async function openProfile(name: string) {
+  try {
+    const p = await getJSON<{ name: string; total: number; today: number; showing: number; last: { x: number; y: number; ts: number } | null }>(`/api/profile?name=${encodeURIComponent(name)}`);
+    $('#profile-name').textContent = `@${p.name}`;
+    $('#pf-total').textContent = fmt(p.total);
+    $('#pf-today').textContent = fmt(p.today);
+    $('#pf-showing').textContent = fmt(p.showing);
+    $('#pf-last').textContent = p.last ? ago(p.last.ts) : '—';
+    profileLast = p.last;
+    $<HTMLButtonElement>('#pf-jump').disabled = !p.last;
+    showProfile(true);
+  } catch {
+    toast("Couldn't load that profile.");
+  }
+}
+$('#profile-back').addEventListener('click', () => showProfile(false));
+$('#pf-jump').addEventListener('click', () => {
+  if (!profileLast) return;
+  const { x, y } = profileLast;
+  closeTop();
+  setTimeout(() => goTo(x, y, 16), 300);
+});
+
+// ---------- pixel history & reports ----------
+const linkTo = (i: number) => `${location.origin}/?x=${i % W}&y=${(i / W) | 0}&z=${Math.round(base.s * zoom)}`;
+async function openHistory() {
+  if (lastTapped < 0) return;
+  const i = lastTapped, x = i % W, y = (i / W) | 0;
+  $('#history-title').textContent = `Pixel ${x}, ${y}`;
+  $('#history-list').innerHTML = '';
+  $('#history-note').textContent = 'Loading…';
+  openPanel($('#history'));
+  try {
+    const r = await getJSON<{ times: number; history: { colour: number; ts: number; name: string | null }[] }>(`/api/pixel?x=${x}&y=${y}`);
+    $('#history-list').replaceChildren(...r.history.map((h, k) => {
+      const li = document.createElement('li');
+      const chip = document.createElement('i'), who = document.createElement('span'), when = document.createElement('b');
+      chip.className = 'chip';
+      chip.style.background = PALETTE[h.colour];
+      who.textContent = k === 0 && myPixels.has(i) ? 'you' : h.name ?? 'anonymous';
+      when.textContent = ago(h.ts);
+      li.append(chip, who, when);
+      return li;
+    }));
+    $('#history-note').textContent = r.times ? `Painted ${fmt(r.times)} time${r.times === 1 ? '' : 's'} in all${r.times > 5 ? '; the latest 5 are shown' : ''}.` : 'Nobody has painted this pixel yet.';
+  } catch {
+    $('#history-note').textContent = "Couldn't load the history.";
+  }
+}
+$('#info').addEventListener('click', openHistory);
+$('#info').addEventListener('keydown', (e) => (e as KeyboardEvent).key === 'Enter' && openHistory());
+$('#history-link').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(linkTo(lastTapped));
+    toast('Link copied');
+  } catch {
+    toast(linkTo(lastTapped));
+  }
+});
+$('#history-report').addEventListener('click', async () => {
+  const r = await postJSON('/api/report', { d: deviceId, x: lastTapped % W, y: (lastTapped / W) | 0 }).catch(() => ({ status: 0 }));
+  closeTop();
+  toast(r.status === 200 ? 'Reported. Thanks for keeping the canvas nice.' : r.status === 429 ? 'You just reported something. Try again in a few seconds.' : "Couldn't send the report.");
+});
+
+// ---------- jump to where someone just painted ----------
+$('#online').addEventListener('click', async () => {
+  try {
+    const m = await getJSON<{ e?: WireEvent[] }>(`/api/events?since=${Math.max(0, st.lastId - 30)}`);
+    const e = (m.e ?? []).filter((x) => x[4] !== who).pop();
+    if (!e || Date.now() - e[5] > 3_600_000) return toast('Nobody else has painted in the last hour.');
+    goTo(e[1], e[2], 16);
+    toast(`Someone painted here ${ago(e[5])}`);
+  } catch {
+    toast("Couldn't check right now.");
+  }
+});
+
+// ---------- guide image (only this device sees it) ----------
+type TplSave = { src: string; x: number; y: number; w: number; alpha: number; on: boolean };
+let tpl: (TplSave & { img: HTMLImageElement; cv: HTMLCanvasElement; idx: Uint8Array }) | null = null;
+const TPL_MAX = 600;
+function buildTpl() {
+  if (!tpl) return;
+  const w = Math.max(8, Math.min(tpl.w, tpl.img.naturalWidth, W)), h = Math.max(1, Math.min(H, Math.round((tpl.img.naturalHeight * w) / tpl.img.naturalWidth)));
+  tpl.w = w;
+  const cv2 = document.createElement('canvas');
+  cv2.width = w;
+  cv2.height = h;
+  const g = cv2.getContext('2d', { willReadFrequently: true })!;
+  g.imageSmoothingQuality = 'high';
+  g.drawImage(tpl.img, 0, 0, w, h);
+  const img = g.getImageData(0, 0, w, h), idx = new Uint8Array(w * h);
+  for (let k = 0; k < w * h; k++) {
+    const o = k * 4;
+    if (img.data[o + 3] < 128) { idx[k] = EMPTY; img.data[o + 3] = 0; continue; } // transparent stays transparent
+    const c = (idx[k] = snap(img.data[o], img.data[o + 1], img.data[o + 2]));
+    img.data.set([...PAL_RGB[c], 255], o);
+  }
+  g.putImageData(img, 0, 0);
+  Object.assign(tpl, { cv: cv2, idx, x: Math.min(tpl.x, W - w), y: Math.min(tpl.y, H - h) });
+}
+function tplAt(i: number) {
+  if (!tpl?.on) return undefined;
+  const x = (i % W) - tpl.x, y = ((i / W) | 0) - tpl.y;
+  if (x < 0 || y < 0 || x >= tpl.cv.width || y >= tpl.cv.height) return undefined;
+  const c = tpl.idx[y * tpl.cv.width + x];
+  return c === EMPTY ? undefined : c;
+}
+function saveTpl() {
+  if (!tpl) return store.set('pw.tpl', '');
+  const { src, x, y, w, alpha, on } = tpl;
+  store.set('pw.tpl', JSON.stringify({ src, x, y, w, alpha, on }));
+}
+function paintTpl() {
+  $('#guide').setAttribute('aria-pressed', String(!!tpl?.on));
+  $('#tpl-controls').hidden = !tpl;
+  $('#tpl-choose').textContent = tpl ? 'Choose a different image' : 'Choose an image';
+  if (!tpl) return board.kick();
+  const wIn = $<HTMLInputElement>('#tpl-w');
+  wIn.max = String(Math.min(TPL_MAX, tpl.img.naturalWidth));
+  wIn.value = String(tpl.w);
+  $('#tpl-w-out').textContent = `${tpl.w} × ${tpl.cv.height} px`;
+  $<HTMLInputElement>('#tpl-a').value = String(Math.round(tpl.alpha * 100));
+  $('#tpl-toggle').textContent = tpl.on ? 'Hide' : 'Show';
+  $('#tpl-pos').textContent = `Top-left corner at ${tpl.x}, ${tpl.y}.` + (lastTapped >= 0 ? '' : ' Tap a pixel on the canvas first to choose where it goes.');
+  board.kick();
+}
+async function loadTpl(t: TplSave) {
+  const img = new Image();
+  img.src = t.src;
+  await img.decode();
+  tpl = { ...t, img, cv: document.createElement('canvas'), idx: new Uint8Array(0) };
+  buildTpl();
+  paintTpl();
+}
+$('#guide').addEventListener('click', () => (paintTpl(), openPanel($('#tpl-panel'))));
+$('#tpl-choose').addEventListener('click', () => $<HTMLInputElement>('#tpl-file').click());
+$<HTMLInputElement>('#tpl-file').addEventListener('change', async (e) => {
+  const file = (e.target as HTMLInputElement).files?.[0];
+  if (!file) return;
+  try {
+    // Shrink big photos once, so the saved copy fits in local storage.
+    const bmp = await createImageBitmap(file);
+    const k = Math.min(1, TPL_MAX / bmp.width, TPL_MAX / bmp.height);
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(bmp.width * k));
+    c.height = Math.max(1, Math.round(bmp.height * k));
+    c.getContext('2d')!.drawImage(bmp, 0, 0, c.width, c.height);
+    const at = lastTapped >= 0 ? lastTapped : board.pixelAt(area.right / 2, (area.top + area.bottom) / 2);
+    const start = Math.max(0, at);
+    await loadTpl({ src: c.toDataURL('image/png'), x: start % W, y: (start / W) | 0, w: Math.min(c.width, 128), alpha: 0.45, on: true });
+    saveTpl();
+  } catch {
+    toast("Couldn't open that image.");
+  }
+  (e.target as HTMLInputElement).value = '';
+});
+$<HTMLInputElement>('#tpl-w').addEventListener('input', (e) => {
+  if (!tpl) return;
+  tpl.w = Number((e.target as HTMLInputElement).value);
+  buildTpl();
+  paintTpl();
+});
+$<HTMLInputElement>('#tpl-w').addEventListener('change', saveTpl);
+$<HTMLInputElement>('#tpl-a').addEventListener('input', (e) => {
+  if (!tpl) return;
+  tpl.alpha = Number((e.target as HTMLInputElement).value) / 100;
+  saveTpl();
+  board.kick();
+});
+$('#tpl-move').addEventListener('click', () => {
+  if (!tpl || lastTapped < 0) return toast('Tap a pixel on the canvas first.');
+  tpl.x = Math.min(lastTapped % W, W - tpl.cv.width);
+  tpl.y = Math.min((lastTapped / W) | 0, H - tpl.cv.height);
+  saveTpl();
+  paintTpl();
+});
+$('#tpl-toggle').addEventListener('click', () => {
+  if (!tpl) return;
+  tpl.on = !tpl.on;
+  saveTpl();
+  paintTpl();
+});
+$('#tpl-remove').addEventListener('click', () => {
+  tpl = null;
+  saveTpl();
+  paintTpl();
+});
+try {
+  const saved = JSON.parse(store.get('pw.tpl') || 'null') as TplSave | null;
+  if (saved?.src) loadTpl(saved).catch(() => store.set('pw.tpl', ''));
+} catch { /* nothing saved */ }
+
 // ---------- location links: ?x=&y=&z= opens zoomed in on a pixel ----------
 $('#link-btn').addEventListener('click', async () => {
-  const url = `${location.origin}/?x=${lastTapped % W}&y=${(lastTapped / W) | 0}&z=${Math.round(base.s * zoom)}`;
+  const url = linkTo(lastTapped);
   try {
     if (navigator.share && matchMedia('(pointer: coarse)').matches) await navigator.share({ url, text: 'Look at this on PixelWorld' });
     else await navigator.clipboard.writeText(url), toast('Link copied');
@@ -571,12 +928,14 @@ $('#share-btn').addEventListener('click', async () => {
 });
 document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => closeTop()));
 addEventListener('keydown', (e) => {
-  if (e.target instanceof HTMLInputElement || !$('#name-panel').hidden || !$('#leaders').hidden) return;
+  if (e.target instanceof HTMLInputElement || document.querySelector('.panel.open')) return;
   if (e.key === 'Enter' && !placeBtn.disabled) placeDrafts();
   if (e.key === 'd') setMode(mode === 'draw' ? 'move' : 'draw');
 });
 
 // ---------- boot ----------
+// Offline support: the app shell loads without a connection and reconnects by itself.
+if ('serviceWorker' in navigator && import.meta.env.PROD) addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
 // Embarko pins its badge to the bottom-left of hosted apps; leave room so it never covers Place.
 document.documentElement.classList.toggle('hosted', location.hostname.endsWith('.embarko.app') || new URLSearchParams(location.search).has('hosted'));
 pick(colour);

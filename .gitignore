@@ -6,3 +6,4 @@ data
 *.db-*
 .env*
 .admin-secret
+.localdata
