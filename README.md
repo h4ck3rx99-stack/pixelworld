@@ -15,6 +15,9 @@ button. Tapping "online now" jumps to the latest pixel someone else placed. Whil
 minimap in the corner shows where you are (tap or drag it to jump). Leaderboard names open a small
 profile (pixels placed, today, still showing, last seen, and a jump to their latest pixel).
 
+First-time visitors get a short one-time intro (what it is, how to paint, getting around) that ends by
+offering to set a name; it's skipped for anyone who has played before.
+
 People can set an optional, unique username (2–20 letters, numbers, spaces, `_ . -`); without one
 they show as "anonymous". Names with slurs or obvious swearing are refused (`blockedName` in
 `server/app.ts`: long slurs match anywhere, short words only as whole words so names like Ishita pass).

@@ -893,21 +893,43 @@ function goTo(x: number, y: number, z: number) {
   clampPan();
   showInfo(y * W + x);
 }
-$('#name-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const name = $<HTMLInputElement>('#name-input').value;
+async function saveName(name: string, error: HTMLElement) {
   const res = await postJSON('/api/name', { d: deviceId, name }).catch(() => ({ status: 0, body: {} as { name?: string } }));
   if (res.status === 200) {
     showName(res.body.name!);
     closeTop();
     toast(`You're @${res.body.name} now`);
   } else {
-    $('#name-error').textContent =
+    error.textContent =
       res.status === 409 ? 'Someone already has that name. Try another.'
       : res.status === 400 ? 'Use 2–20 letters, numbers, spaces, _ . or -'
       : "Couldn't save. Check your connection.";
   }
-});
+}
+$('#name-form').addEventListener('submit', (e) => (e.preventDefault(), saveName($<HTMLInputElement>('#name-input').value, $('#name-error'))));
+
+// ---------- first visit: a one-time intro that ends by asking for a name ----------
+const wlSteps = [...document.querySelectorAll<HTMLElement>('.wl-step')];
+let wlAt = 0;
+function wlShow(n: number) {
+  wlAt = n;
+  wlSteps.forEach((s, k) => (s.hidden = k !== n));
+  $('#wl-title').innerHTML = wlSteps[n].dataset.title!; // our own markup, from index.html
+  document.querySelectorAll('#wl-dots i').forEach((d, k) => d.classList.toggle('on', k === n));
+  const last = n === wlSteps.length - 1;
+  $('.wl-nav').hidden = last;
+  $<HTMLButtonElement>('#wl-back').disabled = n === 0;
+  if (last) store.set('pw.nameAsked', '1'), $<HTMLInputElement>('#wl-name').focus();
+}
+$('#wl-next').addEventListener('click', () => wlShow(wlAt + 1));
+$('#wl-back').addEventListener('click', () => wlShow(wlAt - 1));
+$('#wl-name-form').addEventListener('submit', (e) => (e.preventDefault(), saveName($<HTMLInputElement>('#wl-name').value, $('#wl-error'))));
+function openWelcome() {
+  store.set('pw.welcome', '1');
+  dismissHint();
+  wlShow(0);
+  openPanel($('#welcome'));
+}
 
 // ---------- top bar ----------
 const soundBtn = $('#sound');
@@ -974,6 +996,8 @@ document.addEventListener('visibilitychange', hello);
   setInterval(hello, 15_000);
   const q = new URLSearchParams(location.search);
   if (q.has('record') || q.has('timelapse')) openTimelapse(q.has('record'));
+  // only brand-new visitors: anyone who already dismissed the old hint or has a name has played before
+  else if (!store.get('pw.welcome') && store.get('pw.hint') !== '2' && !myName) openWelcome();
   const lx = Number(q.get('x')), ly = Number(q.get('y'));
   if (q.has('x') && q.has('y') && Number.isInteger(lx) && Number.isInteger(ly) && lx >= 0 && ly >= 0 && lx < W && ly < H) {
     dismissHint();

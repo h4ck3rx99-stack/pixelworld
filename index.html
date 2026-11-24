@@ -192,6 +192,48 @@
     </div>
   </div>
 
+  <div id="welcome" class="panel modal" role="dialog" aria-modal="true" aria-labelledby="wl-title" hidden>
+    <div class="card">
+      <div class="panel-head">
+        <h2 id="wl-title">Welcome to Pixel<em>World</em></h2>
+        <button class="icon" type="button" data-close aria-label="Skip intro"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </div>
+      <section class="wl-step" data-title="Welcome to Pixel<em>World</em>">
+        <p>One pixel canvas for the whole world. Everyone who opens this page paints on the same 2400 × 1350 grid, live, and it never resets.</p>
+        <p>Here's how it works. It takes 20 seconds.</p>
+      </section>
+      <section class="wl-step" data-title="How to paint" hidden>
+        <ol class="wl-list">
+          <li><b>Pick a colour</b> from the swatches. The rainbow one opens all 254.</li>
+          <li><b>Tap pixels</b> to draft them, or switch to <b>Draw</b> and drag. Only you see drafts.</li>
+          <li><b>Press Place</b> and they all go up at once.</li>
+        </ol>
+        <p>You start with <b>16 pixels</b>. One comes back every 30 seconds, and your bank grows to 64.</p>
+      </section>
+      <section class="wl-step" data-title="Getting around" hidden>
+        <ul class="wl-list">
+          <li><b>Pinch or double-tap</b> to zoom, drag to move around.</li>
+          <li><b>Tap any pixel</b> to see who painted it; tap that line for its history.</li>
+          <li><b>Guide</b> lays a picture over the canvas so you can trace it.</li>
+          <li><b>Top</b> shows today's busiest painters.</li>
+        </ul>
+        <p>Anyone can paint over anyone, so the art keeps changing.</p>
+      </section>
+      <form id="wl-name-form" class="wl-step" data-title="Your name" autocomplete="off" hidden>
+        <p>Pick a name and it shows as "by your name" when someone taps your pixels. You can change it later, or skip and stay anonymous.</p>
+        <input id="wl-name" class="name-input" maxlength="20" minlength="2" required placeholder="2–20 letters or numbers" aria-label="Your name" />
+        <p id="wl-error" class="small" aria-live="polite"></p>
+        <button class="save" type="submit">Save and start painting</button>
+        <button class="skip" type="button" data-close>Skip, stay anonymous</button>
+      </form>
+      <div class="wl-nav">
+        <button id="wl-back" class="skip" type="button">Back</button>
+        <span id="wl-dots" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+        <button id="wl-next" class="save" type="button">Next</button>
+      </div>
+    </div>
+  </div>
+
   <div id="about" class="panel modal" role="dialog" aria-modal="true" aria-labelledby="about-title" hidden>
     <div class="card">
       <div class="panel-head">
