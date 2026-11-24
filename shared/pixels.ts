@@ -44,8 +44,9 @@ const BASE_NAMES = [
 ];
 
 const int = (v: unknown, lo: number, hi: number) => Number.isInteger(v) && (v as number) >= lo && (v as number) <= hi;
+/** A colour is a palette index, or EMPTY: the eraser puts a pixel back to blank. */
 export const validPixel = (x: unknown, y: unknown, colour: unknown) =>
-  int(x, 0, W - 1) && int(y, 0, H - 1) && int(colour, 0, PALETTE.length - 1);
+  int(x, 0, W - 1) && int(y, 0, H - 1) && (int(colour, 0, PALETTE.length - 1) || colour === EMPTY);
 
 /** Calendar day in UTC (YYYY-MM-DD); daily placement caps reset on it. */
 export const utcDay = (ts: number) => new Date(ts).toISOString().slice(0, 10);

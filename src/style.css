@@ -240,6 +240,10 @@ nav { display: flex; }
 }
 .pill { border-width: 2px; border-color: var(--line); font-size: 10px; height: 30px; padding: 0 8px; gap: 6px; }
 .pill.name { line-height: 26px; }
+/* three modes and five tools on a 375px phone */
+.tools { gap: 2px; }
+.seg button { min-width: 42px; padding: 0 3px; }
+.tool { min-width: 40px; padding: 0 2px; }
 .seg button, .tool { font-size: 10px; }
 .seg { background: var(--bg); border: 2px solid var(--line); padding: 2px; }
 .icon:hover, .tool:hover:not(:disabled), .ghost:hover { background: var(--line); }
@@ -320,13 +324,27 @@ nav { display: flex; }
   .swatch { height: 50px; }
   .swatch i { width: 36px; height: 36px; }
   .actions { padding: 0 4px; width: 100%; }
-  .tools { flex-wrap: nowrap; gap: 2px; }
-  .seg button { min-width: 46px; padding: 0 4px; }
+  /* modes on one row, the five tools evenly on the next */
+  .tools { display: grid; grid-template-columns: repeat(5, 1fr); gap: 2px; width: 100%; }
+  .tools .seg { grid-column: 1 / -1; }
+  .tools .seg button { flex: 1; }
+  .palette { padding: 0 8px 0 4px; } /* room for the selected swatch's outline and shadow */
+  .place { min-width: 0; }
+  .place .txt { flex: 1; min-width: 0; }
+  .place b { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   .side-top { display: block; flex: 1; min-height: 0; overflow-y: auto; margin: 10px 4px 0; padding: 12px 10px 0; border-top: 2px solid var(--line); }
   .side-top h3 { margin: 0 0 4px; font: 700 12px/1.3 var(--pixel); text-transform: uppercase; color: var(--accent); }
   .place { min-height: 52px; padding: 0 12px 0 8px; gap: 8px; }
   .toast { left: calc((100vw - 304px) / 2); bottom: 16px; }
   .hint { left: calc((100vw - 304px) / 2); }
+}
+/* phones held sideways: everything has to fit in ~390px of height */
+@media (orientation: landscape) and (max-height: 560px) {
+  .palette { grid-template-columns: repeat(9, 1fr); }
+  .swatch { height: 34px; }
+  .swatch i { width: 24px; height: 24px; }
+  .seg button, .tool { height: 40px; }
+  .side-top { display: none; }
 }
 @media (max-width: 479px) {
   #stats { display: none; } /* the same numbers are in About; on phones the header stays two rows */

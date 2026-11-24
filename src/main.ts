@@ -3,7 +3,7 @@ import '@fontsource/silkscreen/700.css';
 import '@fontsource/space-mono/400.css';
 import '@fontsource/space-mono/700.css';
 import './style.css';
-import { BANK_SIZE, BASE, colourName, EMPTY, H, nearest, PALETTE, REGEN_MS, rgbOf, START_PIXELS, W, type WireEvent } from '../shared/pixels.ts';
+import { BANK_SIZE, BASE, colourName, EMPTY, H, nearest, PALETTE, PAPER, REGEN_MS, rgbOf, START_PIXELS, W, type WireEvent } from '../shared/pixels.ts';
 import { chime, music, setSound, soundOn } from './audio.ts';
 import { Board } from './board.ts';
 import { deviceId, getJSON, Live, myWho, postJSON, type State } from './net.ts';
@@ -20,7 +20,9 @@ let who = '';
 let myName: string | null = null;
 let lastTapped = -1;
 let highlightUntil = 0;
-let mode: 'move' | 'draw' = store.get('pw.mode') === 'draw' ? 'draw' : 'move';
+type Mode = 'move' | 'tap' | 'draw'; // move: look around only; tap: taps draft; draw: drags paint
+let mode: Mode = (['move', 'tap', 'draw'] as const).find((m) => m === store.get('pw.mode')) ?? 'tap';
+const hexOf = (c: number) => (c === EMPTY ? PAPER : PALETTE[c]); // EMPTY = the eraser
 let picking = false; // the colour picker is armed for the next tap
 let colour = (() => {
   const c = Number(store.get('pw.colour') ?? 5); // first visit: red, never white on white paper
@@ -194,6 +196,7 @@ function outOfPixels() {
 
 /** Draw-mode painting: adds a draft, never removes one. Skips pixels that already have this colour. */
 function paintDraft(i: number) {
+  if (colour === EMPTY && drafts.has(i)) return void (drafts.delete(i), paintPlace(), board.kick()); // the eraser rubs out drafts first
   if (drafts.get(i) === colour || (!drafts.has(i) && board.colours[i] === colour)) return;
   if (!drafts.has(i) && pixelsLeft() <= 0) return outOfPixels();
   drafts.set(i, colour);
@@ -212,7 +215,9 @@ function tapPixel(i: number) {
     pick(c);
     return toast(`Picked ${colourName(c)}`);
   }
-  if (drafts.get(i) === colour) drafts.delete(i);
+  if (mode === 'move') return; // Move only looks
+  if (drafts.get(i) === colour || (colour === EMPTY && drafts.has(i))) drafts.delete(i);
+  else if (colour === EMPTY && board.colours[i] === EMPTY) toast('That pixel is already blank.');
   else if (drafts.has(i) || pixelsLeft() > 0) drafts.set(i, colour);
   else outOfPixels();
   paintPlace();
@@ -242,7 +247,9 @@ function paintPlace() {
     blocked ? `Try again in ${clock(blocked)}`
     : ready ? `Place ${ready} pixel${ready === 1 ? '' : 's'}`
     : n < 1 ? `Next pixel in ${clock((1 - t) * REGEN_MS)}`
-    : mode === 'draw' ? 'Drag on the canvas to draw' : 'Tap pixels to draft them';
+    : mode === 'draw' ? 'Drag on the canvas to draw'
+    : mode === 'move' ? 'Switch to Tap or Draw to paint'
+    : colour === EMPTY ? 'Tap pixels to erase them' : 'Tap pixels to draft them';
   $('#place-xy').textContent = drafts.size > n ? `${drafts.size - n} more than you have` : '';
   $('#bank b').textContent = String(Math.max(0, n - drafts.size));
   $('#bank small').textContent = n < BANK_SIZE ? `+1 in ${clock((1 - (t % 1)) * REGEN_MS)}` : 'full';
@@ -416,7 +423,7 @@ board.overlay = (g, now) => {
   for (const [i, c] of drafts) {
     const [x, y, w] = board.rectOf(i);
     const r = Math.max(w, 2 * d);
-    g.fillStyle = PALETTE[c];
+    g.fillStyle = hexOf(c);
     g.fillRect(x, y, r, r);
     if (w >= 8 * d) {
       // drafts get a dashed outline so they read as "not placed yet"
@@ -522,11 +529,14 @@ moreBtn.removeAttribute('role');
 let recent: number[] = (() => {
   try { return (JSON.parse(store.get('pw.recent') ?? '[]') as number[]).filter((c) => Number.isInteger(c) && c >= 0 && c < PALETTE.length); } catch { return []; }
 })();
+let ink = colour; // the last real colour, so turning the eraser off goes back to it
 function pick(c: number) {
   colour = c;
-  store.set('pw.colour', String(c));
+  const erasing = c === EMPTY;
+  $('#eraser').setAttribute('aria-pressed', String(erasing));
+  if (!erasing) (ink = c), store.set('pw.colour', String(c));
   swatches.forEach((b, i) => b.setAttribute('aria-checked', String(i === c)));
-  if (c >= BASE.length) {
+  if (c >= BASE.length && !erasing) {
     customSwatch.hidden = false;
     customSwatch.dataset.c = String(c);
     customSwatch.style.setProperty('--c', PALETTE[c]);
@@ -534,9 +544,10 @@ function pick(c: number) {
     recent = [c, ...recent.filter((x) => x !== c)].slice(0, 18);
     store.set('pw.recent', JSON.stringify(recent));
   }
-  customSwatch.setAttribute('aria-checked', String(c >= BASE.length));
-  placeBtn.style.setProperty('--c', PALETTE[c]);
-  if (!$('#colour-panel').hidden) showChosen();
+  customSwatch.setAttribute('aria-checked', String(c >= BASE.length && !erasing));
+  placeBtn.style.setProperty('--c', hexOf(c));
+  if (!$('#colour-panel').hidden && !erasing) showChosen();
+  paintPlace();
   board.kick();
 }
 if (recent[0] !== undefined && colour < BASE.length) {
@@ -623,11 +634,10 @@ const wheelPick = (e: PointerEvent) => {
 };
 wheel.addEventListener('pointerdown', (e) => (wheel.setPointerCapture(e.pointerId), wheelPick(e)));
 wheel.addEventListener('pointermove', (e) => e.buttons && wheelPick(e));
-function setMode(m: 'move' | 'draw') {
+function setMode(m: Mode) {
   mode = m;
   store.set('pw.mode', m);
-  $('#mode-move').setAttribute('aria-pressed', String(m === 'move'));
-  $('#mode-draw').setAttribute('aria-pressed', String(m === 'draw'));
+  for (const k of ['move', 'tap', 'draw']) $('#mode-' + k).setAttribute('aria-pressed', String(m === k));
   paintPlace();
 }
 function setPicking(on: boolean) {
@@ -636,7 +646,9 @@ function setPicking(on: boolean) {
   if (on) toast('Tap any pixel to copy its colour');
 }
 $('#mode-move').addEventListener('click', () => setMode('move'));
+$('#mode-tap').addEventListener('click', () => setMode('tap'));
 $('#mode-draw').addEventListener('click', () => setMode('draw'));
+$('#eraser').addEventListener('click', () => pick(colour === EMPTY ? ink : EMPTY));
 $('#picker').addEventListener('click', () => setPicking(!picking));
 $('#clear').addEventListener('click', clearDrafts);
 $('#mine').addEventListener('click', showMine);
@@ -752,7 +764,7 @@ async function openHistory() {
       const li = document.createElement('li');
       const chip = document.createElement('i'), who = document.createElement('span'), when = document.createElement('b');
       chip.className = 'chip';
-      chip.style.background = PALETTE[h.colour];
+      chip.style.background = hexOf(h.colour);
       who.textContent = k === 0 && myPixels.has(i) ? 'you' : h.name ?? 'anonymous';
       when.textContent = ago(h.ts);
       li.append(chip, who, when);
@@ -1002,7 +1014,7 @@ document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('cli
 addEventListener('keydown', (e) => {
   if (e.target instanceof HTMLInputElement || document.querySelector('.panel.open')) return;
   if (e.key === 'Enter' && !placeBtn.disabled) placeDrafts();
-  if (e.key === 'd') setMode(mode === 'draw' ? 'move' : 'draw');
+  if (e.key === 'd') setMode(mode === 'draw' ? 'tap' : 'draw');
 });
 
 // ---------- boot ----------

@@ -9,6 +9,7 @@ describe('pixels', () => {
     expect(validPixel(0, H, 0)).toBe(false);
     expect(validPixel(0, -1, 0)).toBe(false);
     expect(validPixel(0, 0, PALETTE.length)).toBe(false);
+    expect(validPixel(0, 0, EMPTY)).toBe(true); // the eraser
     expect(validPixel(1.5, 0, 0)).toBe(false);
     expect(validPixel('1', 0, 0)).toBe(false);
   });

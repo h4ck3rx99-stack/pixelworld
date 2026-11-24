@@ -294,6 +294,14 @@ describe('server', () => {
     expect((await app.request('/api/admin/export', { headers: auth })).status).toBe(200);
   });
 
+  it('the eraser puts a pixel back to blank', async () => {
+    const app = boot();
+    await place(app, { d: D1, x: 3, y: 3, colour: 5 });
+    await place(app, { d: D1, x: 3, y: 3, colour: EMPTY });
+    expect((await boardOf(app))[3 * W + 3]).toBe(EMPTY);
+    expect((await (await app.request('/api/pixel?x=3&y=3')).json()).times).toBe(2);
+  });
+
   it('full reset forgets pixels, names, banks and reports', async () => {
     const app = boot();
     await place(app, { d: D1, x: 5, y: 5, colour: 1 });
