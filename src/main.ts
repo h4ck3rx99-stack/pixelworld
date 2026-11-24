@@ -4,7 +4,7 @@ import '@fontsource/space-mono/400.css';
 import '@fontsource/space-mono/700.css';
 import './style.css';
 import { BANK_SIZE, BASE, colourName, EMPTY, H, nearest, PALETTE, REGEN_MS, rgbOf, START_PIXELS, W, type WireEvent } from '../shared/pixels.ts';
-import { chime, setSound, soundOn } from './audio.ts';
+import { chime, music, setSound, soundOn } from './audio.ts';
 import { Board } from './board.ts';
 import { deviceId, getJSON, Live, myWho, postJSON, type State } from './net.ts';
 import { shareCard } from './share.ts';
@@ -970,7 +970,12 @@ const paintSound = () => {
   soundBtn.setAttribute('aria-pressed', String(soundOn()));
   soundBtn.setAttribute('aria-label', soundOn() ? 'Sound on' : 'Sound off');
 };
+// Browsers allow audio only after a gesture, so the music waits for the first tap or key anywhere.
+const startMusic = () => (soundOn() && music(true), removeEventListener('pointerdown', startMusic), removeEventListener('keydown', startMusic));
+addEventListener('pointerdown', startMusic);
+addEventListener('keydown', startMusic);
 soundBtn.addEventListener('click', () => {
+  removeEventListener('pointerdown', startMusic);
   setSound(!soundOn());
   paintSound();
   if (soundOn()) chime(colour);
