@@ -293,4 +293,17 @@ describe('server', () => {
     expect((await boardOf(app))[5 * W + 5]).toBe(EMPTY);
     expect((await app.request('/api/admin/export', { headers: auth })).status).toBe(200);
   });
+
+  it('full reset forgets pixels, names, banks and reports', async () => {
+    const app = boot();
+    await place(app, { d: D1, x: 5, y: 5, colour: 1 });
+    await app.request('/api/name', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ d: D1, name: 'Ada' }) });
+    await app.request('/api/report', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ d: D1, x: 5, y: 5 }) });
+    const auth = { authorization: 'Bearer s3cret', 'content-type': 'application/json' };
+    const r = await app.request('/api/admin/reset', { method: 'POST', headers: auth, body: JSON.stringify({ all: true }) });
+    expect((await r.json()).deleted).toBe(1);
+    const s = await (await app.request(`/api/state?d=${D1}`)).json();
+    expect([s.pixels, s.name ?? null, s.tokens]).toEqual([0, null, START_PIXELS]);
+    expect((await (await app.request("/api/admin/reports", { headers: auth })).json()).areas).toEqual([]);
+  });
 });

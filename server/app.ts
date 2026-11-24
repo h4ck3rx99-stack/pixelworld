@@ -385,8 +385,11 @@ export function createApp(opts: Options) {
     load();
     reloadPending = true;
   }
-  admin.post('/reset', (c) => {
+  // Body {"all": true} also forgets names, pixel banks and reports: a completely fresh start.
+  admin.post('/reset', async (c) => {
+    const all = (await c.req.json().catch(() => null))?.all === true;
     const n = db.prepare('DELETE FROM events').run().changes;
+    if (all) for (const t of ['names', 'banks', 'reports']) db.prepare(`DELETE FROM ${t}`).run();
     afterAdminChange();
     return c.json({ ok: true, deleted: n });
   });

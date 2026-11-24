@@ -77,6 +77,8 @@ All need `Authorization: Bearer $ADMIN_SECRET`.
 ```sh
 # wipe the whole canvas and its history
 curl -X POST https://pixelworld.embarko.app/api/admin/reset -H "Authorization: Bearer $ADMIN_SECRET"
+# completely fresh start: also forgets names, pixel banks and reports
+curl -X POST https://pixelworld.embarko.app/api/admin/reset -H "Authorization: Bearer $ADMIN_SECRET"      -H 'content-type: application/json' -d '{"all":true}'
 # remove every pixel a device ever placed (find the id in the export)
 curl -X POST https://pixelworld.embarko.app/api/admin/purge -H "Authorization: Bearer $ADMIN_SECRET" \
      -H 'content-type: application/json' -d '{"device":"<uuid>"}'
