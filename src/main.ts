@@ -72,7 +72,7 @@ const pts = new Map<number, { x: number; y: number; x0: number; y0: number }>();
 let pinch: { d: number; z: number } | null = null;
 let moved = false;
 let stroke: number | null = null; // last pixel of the current Draw stroke
-let lastTap = { t: 0, x: 0, y: 0 };
+let lastTap = { t: 0, x: 0, y: 0, i: -1, before: undefined as number | undefined }; // before: that pixel's draft before the tap, so a double-tap can undo it
 const cv = board.cv;
 // ---------- minimap: shown while zoomed in; tap or drag it to jump ----------
 let miniDrag = -1;
@@ -144,10 +144,22 @@ const up = (e: PointerEvent) => {
   if (!pts.size) stroke = null;
   if (!p || moved || wasStroke || e.type === 'pointercancel' || pts.size) return;
   const dbl = e.timeStamp - lastTap.t < 320 && Math.hypot(p.x - lastTap.x, p.y - lastTap.y) < 40;
-  lastTap = { t: e.timeStamp, x: p.x, y: p.y };
   dismissHint();
-  if (dbl && !picking) return animateZoom(zoom > 1.5 ? 1 : Math.min(maxZoom(), 16 / base.s), p.x, p.y); // dive in / back out
-  tapPixel(board.pixelAt(p.x, p.y));
+  if (dbl && !picking) {
+    // the first tap of a double-tap already toggled a draft; put it back
+    const { i: was, before } = lastTap;
+    if (was >= 0) {
+      if (before === undefined) drafts.delete(was);
+      else drafts.set(was, before);
+      paintPlace();
+      board.kick();
+    }
+    lastTap = { t: 0, x: 0, y: 0, i: -1, before: undefined };
+    return animateZoom(zoom > 1.5 ? 1 : Math.min(maxZoom(), 16 / base.s), p.x, p.y); // dive in / back out
+  }
+  const i = board.pixelAt(p.x, p.y);
+  lastTap = { t: e.timeStamp, x: p.x, y: p.y, i: picking ? -1 : i, before: drafts.get(i) };
+  tapPixel(i);
 };
 cv.addEventListener('pointerup', up);
 cv.addEventListener('pointercancel', up);
