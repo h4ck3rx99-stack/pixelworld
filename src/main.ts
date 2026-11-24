@@ -14,6 +14,7 @@ const ids = new Int32Array(W * H); // id of the last event applied to each pixel
 const myPixels = new Set<number>();
 const drafts = new Map<number, number>(); // pixel index -> colour, waiting for Place
 let who = '';
+let myName: string | null = null;
 let lastTapped = -1;
 let highlightUntil = 0;
 let mode: 'move' | 'draw' = store.get('pw.mode') === 'draw' ? 'draw' : 'move';
@@ -285,10 +286,10 @@ async function showInfo(i: number) {
   const el = $('#info');
   el.textContent = `${x}, ${y}`;
   try {
-    const r = await getJSON<{ times: number; ts: number | null }>(`/api/pixel?x=${x}&y=${y}`);
+    const r = await getJSON<{ times: number; ts: number | null; by: string | null }>(`/api/pixel?x=${x}&y=${y}`);
     if (seq !== infoSeq) return;
     el.textContent = r.times
-      ? `${x}, ${y} · painted ${r.times}× · last ${ago(r.ts!)}${myPixels.has(i) ? ' · yours' : ''}`
+      ? `${x}, ${y} · by ${myPixels.has(i) ? 'you' : r.by ?? 'anonymous'} · painted ${r.times}× · last ${ago(r.ts!)}`
       : `${x}, ${y} · never painted`;
   } catch { /* coordinates alone are fine */ }
 }
@@ -315,6 +316,7 @@ async function loadState() {
   setStats(s);
   bank = { tokens: s.tokens, at: Date.now() };
   paintPlace();
+  showName(s.name);
 }
 
 const live = new Live(
@@ -449,6 +451,35 @@ $('#picker').addEventListener('click', () => setPicking(!picking));
 $('#clear').addEventListener('click', clearDrafts);
 $('#mine').addEventListener('click', showMine);
 
+// ---------- username ----------
+function showName(n: string | null) {
+  myName = n;
+  const b = $('#name-btn');
+  b.textContent = n ? `@${n}` : 'Set your name';
+  b.classList.toggle('set', !!n);
+}
+$('#name-btn').addEventListener('click', () => {
+  $<HTMLInputElement>('#name-input').value = myName ?? '';
+  $('#name-error').textContent = '';
+  openPanel($('#name-panel'));
+  setTimeout(() => $<HTMLInputElement>('#name-input').focus(), 300);
+});
+$('#name-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const name = $<HTMLInputElement>('#name-input').value;
+  const res = await postJSON('/api/name', { d: deviceId, name }).catch(() => ({ status: 0, body: {} as { name?: string } }));
+  if (res.status === 200) {
+    showName(res.body.name!);
+    closeTop();
+    toast(`You're @${res.body.name} now`);
+  } else {
+    $('#name-error').textContent =
+      res.status === 409 ? 'Someone already has that name. Try another.'
+      : res.status === 400 ? 'Use 2–20 letters, numbers, spaces, _ . or -'
+      : "Couldn't save. Check your connection.";
+  }
+});
+
 // ---------- top bar ----------
 const soundBtn = $('#sound');
 const paintSound = () => {
@@ -480,7 +511,7 @@ $('#share-btn').addEventListener('click', async () => {
 });
 document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => closeTop()));
 addEventListener('keydown', (e) => {
-  if (e.target instanceof HTMLInputElement) return;
+  if (e.target instanceof HTMLInputElement || !$('#name-panel').hidden) return;
   if (e.key === 'Enter' && !placeBtn.disabled) placeDrafts();
   if (e.key === 'd') setMode(mode === 'draw' ? 'move' : 'draw');
 });

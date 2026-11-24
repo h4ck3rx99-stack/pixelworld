@@ -121,6 +121,28 @@ describe('server', () => {
     }
   });
 
+  it('lets people pick a unique name that pixel info shows', async () => {
+    const app = boot();
+    const setName = (d: string, name: unknown) =>
+      app.request('/api/name', { method: 'POST', body: JSON.stringify({ d, name }), headers: { 'content-type': 'application/json' } });
+    expect((await setName(D1, '  Ada   Lovelace ')).status).toBe(200);
+    expect((await (await app.request(`/api/state?d=${D1}`)).json()).name).toBe('Ada Lovelace');
+    expect((await setName(D2, 'ada lovelace')).status).toBe(409); // taken, ignoring case
+    expect((await setName(D2, 'x')).status).toBe(400); // too short
+    expect((await setName(D2, '<script>')).status).toBe(400);
+    expect((await setName(D2, '...')).status).toBe(400); // needs a letter or digit
+    expect((await setName(D2, 42)).status).toBe(400);
+    await place(app, { d: D1, x: 4, y: 4, colour: 1 });
+    expect((await (await app.request('/api/pixel?x=4&y=4')).json()).by).toBe('Ada Lovelace');
+    await place(app, { d: D2, x: 4, y: 4, colour: 2 });
+    expect((await (await app.request('/api/pixel?x=4&y=4')).json()).by).toBeNull(); // last painter is anonymous
+    expect((await setName(D1, 'Ada')).status).toBe(200); // renaming frees the old name
+    expect((await setName(D2, 'Ada Lovelace')).status).toBe(200);
+    const auth = { authorization: 'Bearer s3cret', 'content-type': 'application/json' };
+    await app.request('/api/admin/clear-name', { method: 'POST', headers: auth, body: JSON.stringify({ name: 'ADA' }) });
+    expect((await (await app.request(`/api/state?d=${D1}`)).json()).name).toBeNull();
+  });
+
   it('protects admin endpoints', async () => {
     const app = boot();
     await place(app, { d: D1, x: 5, y: 5, colour: 1 });

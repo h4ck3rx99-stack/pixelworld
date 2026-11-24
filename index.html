@@ -42,6 +42,7 @@
     </div>
     <div class="meta">
       <span id="online" class="pill"><i></i><b>Connecting…</b></span>
+      <button id="name-btn" class="pill name" type="button">Set your name</button>
       <span id="stats"></span>
     </div>
   </header>
@@ -96,6 +97,19 @@
       <button id="tl-replay" class="ghost" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z" class="fill"/></svg>Replay</button>
       <button id="tl-record" class="ghost" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="5.5" class="fill rec"/></svg>Record mode</button>
     </div>
+  </div>
+
+  <div id="name-panel" class="panel modal" role="dialog" aria-modal="true" aria-labelledby="name-title" hidden>
+    <form id="name-form" class="card" autocomplete="off">
+      <div class="panel-head">
+        <h2 id="name-title">Your name</h2>
+        <button class="icon" type="button" data-close aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </div>
+      <p>Shown as "by your name" when someone taps a pixel you painted. Leave it unset to stay anonymous.</p>
+      <input id="name-input" name="name" maxlength="20" minlength="2" required placeholder="2–20 letters or numbers" />
+      <p id="name-error" class="small" aria-live="polite"></p>
+      <button class="save" type="submit">Save name</button>
+    </form>
   </div>
 
   <div id="about" class="panel modal" role="dialog" aria-modal="true" aria-labelledby="about-title" hidden>

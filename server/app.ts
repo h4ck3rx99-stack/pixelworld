@@ -19,6 +19,7 @@ const POLL_MAX = 1000;
 
 type Row = { id: number; x: number; y: number; colour: number; device: string; who: string; ts: number };
 const wire = (r: Row): WireEvent => [r.id, r.x, r.y, r.colour, r.who, r.ts];
+export const validName = (n: string) => /^[\p{L}\p{N}_.\- ]{2,20}$/u.test(n) && /[\p{L}\p{N}]/u.test(n);
 export const whoOf = (device: string) => createHash('sha256').update(device).digest('hex').slice(0, 10);
 
 export function createApp(opts: Options) {
@@ -33,6 +34,8 @@ export function createApp(opts: Options) {
     CREATE INDEX IF NOT EXISTS events_device ON events(device);
     CREATE INDEX IF NOT EXISTS events_xy ON events(x, y);
     CREATE TABLE IF NOT EXISTS banks (device TEXT PRIMARY KEY, tokens REAL NOT NULL, at INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS names (device TEXT PRIMARY KEY, name TEXT NOT NULL);
+    CREATE UNIQUE INDEX IF NOT EXISTS names_unique ON names(name COLLATE NOCASE);
   `);
   const q = {
     insert: db.prepare('INSERT INTO events (x, y, colour, device, who, ts) VALUES (?, ?, ?, ?, ?, ?)'),
@@ -43,6 +46,10 @@ export function createApp(opts: Options) {
     bankGet: db.prepare('SELECT tokens, at FROM banks WHERE device = ?'),
     bankPut: db.prepare('INSERT OR REPLACE INTO banks (device, tokens, at) VALUES (?, ?, ?)'),
     pixelInfo: db.prepare('SELECT COUNT(*) AS times, MAX(ts) AS ts FROM events WHERE x = ? AND y = ?'),
+    lastPainter: db.prepare('SELECT n.name FROM events e LEFT JOIN names n ON n.device = e.device WHERE e.x = ? AND e.y = ? ORDER BY e.id DESC LIMIT 1'),
+    nameGet: db.prepare('SELECT name FROM names WHERE device = ?'),
+    nameOwner: db.prepare('SELECT device FROM names WHERE name = ? COLLATE NOCASE'),
+    namePut: db.prepare('INSERT OR REPLACE INTO names (device, name) VALUES (?, ?)'),
   };
 
   // ---- the board, kept in memory and rebuilt from the event log on start ----
@@ -156,6 +163,7 @@ export function createApp(opts: Options) {
       w: W, h: H, lastId, board: Buffer.from(board).toString('base64'), ...stats(), since: firstTs,
       mine: me ? mine.get(d) ?? 0 : 0, myPixels,
       tokens: limiter.tokens(me ? d : '', now()),
+      name: me ? (q.nameGet.get(d) as { name: string } | undefined)?.name ?? null : null,
     });
   });
 
@@ -196,7 +204,20 @@ export function createApp(opts: Options) {
     const x = Number(c.req.query('x')), y = Number(c.req.query('y'));
     if (!validPixel(x, y, 0)) return c.json({ error: 'invalid' }, 400);
     const r = q.pixelInfo.get(x, y) as { times: number; ts: number | null };
-    return c.json({ x, y, colour: board[y * W + x], times: r.times, ts: r.ts });
+    const by = r.times ? (q.lastPainter.get(x, y) as { name: string | null }).name : null; // null = anonymous
+    return c.json({ x, y, colour: board[y * W + x], times: r.times, ts: r.ts, by });
+  });
+
+  // Optional public username, shown as "by <name>" in pixel info. Unique ignoring case so nobody can pose as someone else.
+  app.post('/api/name', async (c) => {
+    const b = await c.req.json().catch(() => null);
+    if (!b || typeof b.d !== 'string' || !UUID.test(b.d) || typeof b.name !== 'string') return c.json({ error: 'invalid' }, 400);
+    const name = b.name.trim().replace(/\s+/g, ' ');
+    if (!validName(name)) return c.json({ error: 'invalid_name' }, 400);
+    const owner = q.nameOwner.get(name) as { device: string } | undefined;
+    if (owner && owner.device !== b.d) return c.json({ error: 'taken' }, 409);
+    q.namePut.run(b.d, name);
+    return c.json({ name });
   });
 
   app.post('/api/hello', async (c) => {
@@ -273,8 +294,14 @@ export function createApp(opts: Options) {
     const b = await c.req.json().catch(() => null);
     if (!b || typeof b.device !== 'string' || !b.device) return c.json({ error: 'device required' }, 400);
     const n = db.prepare('DELETE FROM events WHERE device = ?').run(b.device).changes;
+    db.prepare('DELETE FROM names WHERE device = ?').run(b.device);
     afterAdminChange();
     return c.json({ ok: true, deleted: n });
+  });
+  admin.post('/clear-name', async (c) => {
+    const b = await c.req.json().catch(() => null);
+    if (!b || typeof b.name !== 'string') return c.json({ error: 'name required' }, 400);
+    return c.json({ ok: true, cleared: db.prepare('DELETE FROM names WHERE name = ? COLLATE NOCASE').run(b.name).changes });
   });
   admin.get('/export', (c) => {
     c.header('content-disposition', 'attachment; filename="pixelworld.json"');

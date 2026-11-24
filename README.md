@@ -7,7 +7,9 @@ bank of up to 64 pixels that refills one every 30 seconds. The canvas never rese
 timelapse replays its whole history.
 
 Tools: **Pick** (copy a pixel's colour), **Clear** (drop drafts), **Mine** (highlight your
-pixels), and tapping any pixel shows how often it has been painted and when.
+pixels), and tapping any pixel shows who painted it last, how often it has been painted and when.
+People can set an optional, unique username (2–20 letters, numbers, spaces, `_ . -`); without one
+they show as "anonymous".
 
 ## Run locally
 
@@ -63,6 +65,8 @@ curl -X POST https://pixelworld.embarko.app/api/admin/reset -H "Authorization: B
 # remove every pixel a device ever placed (find the id in the export)
 curl -X POST https://pixelworld.embarko.app/api/admin/purge -H "Authorization: Bearer $ADMIN_SECRET" \
      -H 'content-type: application/json' -d '{"device":"<uuid>"}'
+# remove an offensive username (the person shows as anonymous again)
+curl -X POST https://pixelworld.embarko.app/api/admin/clear-name -H "Authorization: Bearer $ADMIN_SECRET" \n     -H 'content-type: application/json' -d '{"name":"<name>"}'
 # export the full event log, with device ids
 curl https://pixelworld.embarko.app/api/admin/export -H "Authorization: Bearer $ADMIN_SECRET" -o pixelworld.json
 ```
@@ -94,7 +98,9 @@ Set `ADMIN_SECRET` in the app's env vars on Embarko.
   doesn't refill everyone. The client mirrors it to show the count and the "+1 in 0:29" timer.
 - **Batches**: `POST /api/place {d, pixels: [[x, y, colour], …]}` places up to 64 in one
   transaction, as many as the bank allows; the client keeps the rest as drafts.
-- **Pixel info**: `GET /api/pixel?x=&y=` returns how many times a pixel was painted and when (never who).
+- **Pixel info**: `GET /api/pixel?x=&y=` returns how many times a pixel was painted, when, and the last
+  painter's username (`by`, null if they never set one). Device ids are never exposed.
+- **Usernames**: `POST /api/name {d, name}`; unique ignoring case so nobody can impersonate someone.
 - **Rendering** (`src/board.ts`): Canvas 2D. Pixels live on a 2400 × 1350 offscreen canvas;
   each frame is one scaled `drawImage` with smoothing off, plus a faint grid when zoomed in.
 - **Timelapse** (`src/timelapse.ts`): `GET /api/log` returns the whole history as flat
