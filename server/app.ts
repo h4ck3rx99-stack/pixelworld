@@ -63,6 +63,9 @@ export function createApp(opts: Options) {
     CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS visits (device TEXT PRIMARY KEY, first INTEGER NOT NULL, last INTEGER NOT NULL, loads INTEGER NOT NULL);
   `);
+  // Devices that opened the page before visits were counted still have a pixel bank; count them once.
+  // Their first visit is approximate (the bank's last change), and their page loads count as one.
+  db.exec('INSERT OR IGNORE INTO visits (device, first, last, loads) SELECT device, at, at, 1 FROM banks');
   // Which generation of the canvas this is. A full reset starts a new one, and browsers that saved
   // things under an older one forget all of it (device id, intro, colours, guide image).
   const newEpoch = () => {
