@@ -88,6 +88,8 @@ curl -X POST https://pixelworld.embarko.app/api/admin/erase -H "Authorization: B
 # remove an offensive username (the person shows as anonymous again)
 curl -X POST https://pixelworld.embarko.app/api/admin/clear-name -H "Authorization: Bearer $ADMIN_SECRET" \
      -H 'content-type: application/json' -d '{"name":"<name>"}'
+# how many people came: unique visitors, today's new and active ones, page loads, and new visitors per day
+curl https://pixelworld.embarko.app/api/admin/stats -H "Authorization: Bearer $ADMIN_SECRET"
 # see what people reported (grouped into 20 x 20 areas, newest first), then clear the list
 curl https://pixelworld.embarko.app/api/admin/reports -H "Authorization: Bearer $ADMIN_SECRET"
 curl -X POST https://pixelworld.embarko.app/api/admin/clear-reports -H "Authorization: Bearer $ADMIN_SECRET"

@@ -61,6 +61,7 @@ export function createApp(opts: Options) {
     CREATE UNIQUE INDEX IF NOT EXISTS names_unique ON names(name COLLATE NOCASE);
     CREATE TABLE IF NOT EXISTS reports (id INTEGER PRIMARY KEY AUTOINCREMENT, x INTEGER NOT NULL, y INTEGER NOT NULL, device TEXT NOT NULL, ts INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS visits (device TEXT PRIMARY KEY, first INTEGER NOT NULL, last INTEGER NOT NULL, loads INTEGER NOT NULL);
   `);
   // Which generation of the canvas this is. A full reset starts a new one, and browsers that saved
   // things under an older one forget all of it (device id, intro, colours, guide image).
@@ -91,6 +92,10 @@ export function createApp(opts: Options) {
     profile: db.prepare('SELECT COUNT(*) AS total, COALESCE(SUM(ts >= ?), 0) AS today FROM events WHERE device = ?'),
     lastOf: db.prepare('SELECT x, y, ts FROM events WHERE device = ? ORDER BY id DESC LIMIT 1'),
     report: db.prepare('INSERT INTO reports (x, y, device, ts) VALUES (?, ?, ?, ?)'),
+    // one row per device that has opened the page: anonymous id and timestamps only
+    visit: db.prepare('INSERT INTO visits (device, first, last, loads) VALUES (?, ?, ?, 1) ON CONFLICT(device) DO UPDATE SET last = excluded.last, loads = loads + 1'),
+    visitStats: db.prepare('SELECT COUNT(*) AS visitors, COALESCE(SUM(first >= ?), 0) AS newToday, COALESCE(SUM(last >= ?), 0) AS activeToday, COALESCE(SUM(loads), 0) AS pageLoads FROM visits'),
+    visitDays: db.prepare("SELECT date(first / 1000, 'unixepoch') AS day, COUNT(*) AS newVisitors FROM visits GROUP BY day ORDER BY day DESC LIMIT 14"),
     reports: db.prepare('SELECT MIN(x) AS x, MIN(y) AS y, COUNT(*) AS n, COUNT(DISTINCT device) AS people, MAX(ts) AS last FROM reports GROUP BY x / 20, y / 20 ORDER BY last DESC LIMIT 100'),
   };
 
@@ -244,6 +249,7 @@ export function createApp(opts: Options) {
     const wid = me ? whoIds.get(me) : 0;
     const myPixels = new Set<number>();
     if (me && !q.bankGet.get(d)) q.bankPut.run(d, START_PIXELS, now()); // the refill clock starts on the first visit
+    if (me) q.visit.run(d, now(), now()); // counts page loads (this runs once per load, and again after a reset)
     if (wid) for (const { x, y } of q.myEvents.all(d) as { x: number; y: number }[]) if (owner[y * W + x] === wid) myPixels.add(y * W + x);
     return c.json({
       w: W, h: H, lastId, ...stats(), since: firstTs, myPixels: [...myPixels], epoch,
@@ -399,7 +405,7 @@ export function createApp(opts: Options) {
     const all = (await c.req.json().catch(() => null))?.all === true;
     const n = db.prepare('DELETE FROM events').run().changes;
     if (all) {
-      for (const t of ['names', 'banks', 'reports']) db.prepare(`DELETE FROM ${t}`).run();
+      for (const t of ['names', 'banks', 'reports', 'visits']) db.prepare(`DELETE FROM ${t}`).run();
       epoch = newEpoch();
     }
     afterAdminChange();
@@ -432,6 +438,11 @@ export function createApp(opts: Options) {
   });
   // Reports grouped into 20 x 20 areas, newest first.
   admin.get('/reports', (c) => c.json({ areas: q.reports.all() }));
+  // Unique visitors (devices), today in UTC, and new visitors per day for the last two weeks.
+  admin.get('/stats', (c) => {
+    const today = Date.parse(utcDay(now()));
+    return c.json({ ...(q.visitStats.get(today, today) as object), painters: people.size, pixels, online: online(), days: q.visitDays.all() });
+  });
   admin.post('/clear-reports', (c) => c.json({ ok: true, cleared: db.prepare('DELETE FROM reports').run().changes }));
 
   // Body: { file: "backup-YYYY-MM-DD.json.gz" }. Replaces every event and name with that backup.

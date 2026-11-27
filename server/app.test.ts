@@ -302,6 +302,19 @@ describe('server', () => {
     expect((await (await app.request('/api/pixel?x=3&y=3')).json()).times).toBe(2);
   });
 
+  it('counts unique visitors and page loads for the admin', async () => {
+    const app = boot();
+    const auth = { authorization: 'Bearer s3cret' };
+    await app.request(`/api/state?d=${D1}`);
+    await app.request(`/api/state?d=${D1}`);
+    await app.request(`/api/state?d=${D2}`);
+    await app.request('/api/state'); // no device id: not counted
+    const s = await (await app.request('/api/admin/stats', { headers: auth })).json();
+    expect([s.visitors, s.newToday, s.activeToday, s.pageLoads]).toEqual([2, 2, 2, 3]);
+    expect(s.days).toHaveLength(1);
+    expect((await app.request('/api/admin/stats')).status).toBe(404); // admin only
+  });
+
   it('full reset forgets pixels, names, banks and reports', async () => {
     const app = boot();
     await place(app, { d: D1, x: 5, y: 5, colour: 1 });
@@ -317,5 +330,6 @@ describe('server', () => {
     expect(s.epoch).toEqual(expect.any(String));
     expect(s.epoch).not.toBe(before); // browsers that saved things before the reset will forget them
     expect((await (await app.request("/api/admin/reports", { headers: auth })).json()).areas).toEqual([]);
+    expect((await (await app.request('/api/admin/stats', { headers: auth })).json()).visitors).toBe(1); // only the visit after the reset
   });
 });
